@@ -125,3 +125,20 @@ Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法
 - 构建：python subprocess build_ime.cmd → **EXIT 0**（12/12 relink），DLL @ 12:14（hash 6eb99f69）。
 - dist/SimpleIME 已同步（cmake --install，hash 一致）。
 - 提交 `c17fde4` 已推送 myfork（7817d6b..c17fde4），远程已验证。
+
+### a296845 增补修复（用真实 profile 而非桩值）
+- **问题**：c17fde4 用 `ActivateProfile(DEFAULT_LANG_PROFILE)` 切美式键盘，但 `DEFAULT_LANG_PROFILE` 的
+  `CLSID_NULL`/`GUID_NULL` 是桩值，不匹配系统 TSF 中实际注册的美式键盘 profile。TSF API 可能静默失败，
+  中文输入法（微信拼音/微软拼音）保持激活，退出 mod 窗口后仍弹候选框。
+- **用户新症状**：在 mod 窗口输入框打字 → 按 ESC 退出 → IME 状态灯依然亮 + 按键盘弹候选框。
+  需要先点击输入框以外区域让 IME 状态消失，再退出才能正常操作。
+- **根因**：`ITfInputProcessorProfiles::ActivateProfile` 用 `CLSID_NULL`/`GUID_NULL` 激活不存在的 profile，
+  返回错误但被静默忽略（之前只打 warning 日志，不影响主流程——但切输入法确实失败了）。
+- **修复**：`InputMethodManager::ActivateKeyboardEng()` 遍历 `m_langProfiles`（系统 TSF 枚举加载的列表），
+  按 `langid == 0x409` 找到实际美式键盘 profile（含真实 CLSID 和 GUID），调用 `ActivateProfile` 激活它。
+  找不到时回退到 `DEFAULT_LANG_PROFILE` 并打 warning（兼容旧系统）。
+- **文件改动**（4 文件 +27/-1）：`InputMethodManager.h` 声明 `ActivateKeyboardEng()`；
+  `InputMethodManager.cpp` 实现遍历+激活逻辑；`ImeWnd.hpp` 添加转发方法；
+  `ImeManager.cpp` 调用 `ActivateEnglishProfile()` 替代 `ActivateLanguageProfile(DEFAULT_LANG_PROFILE.guidProfile)`。
+- **构建**：EXIT 0, [10/10], DLL `321ca4d9...`（4,290,560 B），dist 同步。
+- **提交** `a296845` 已推送 myfork（d9937b7..a296845）。
