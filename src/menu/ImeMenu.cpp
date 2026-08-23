@@ -363,7 +363,12 @@ auto ImeMenu::OnKeyEvent(RE::GFxEvent *event, const bool down) -> RE::UI_MESSAGE
     {
         m_ctrlDown = down;
     }
-    if (Core::State::GetInstance().IsImeInputting())
+    const auto &state = Core::State::GetInstance();
+    // Only swallow keys while the IME is actually enabled AND composing.
+    // If the IME was disabled (e.g. the user left a mod input window) but a
+    // stale composition flag is still set (IMM32 path does not always clear
+    // IN_COMPOSING on focus loss), keys must pass through to the game.
+    if (!state.ImeDisabled() && state.IsImeInputting())
     {
         return RE::UI_MESSAGE_RESULTS::kHandled;
     }

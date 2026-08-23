@@ -59,6 +59,18 @@ auto ImeManager::EnableIme(bool enable) -> Result
             logger::info("IME enabled: clearing IME_DISABLED, focusing TSF");
             state.Clear(State::IME_DISABLED);
             success = m_imeWnd->FocusTextService(true);
+            // Restore the input method that was active before IME was disabled.
+            // Without this, the system TIP stays on the English keyboard after
+            // EnableIme(false) switched it away, and typing in a text field
+            // would be stuck in English mode.
+            if (m_lastActiveProfile != GUID_NULL)
+            {
+                if (FAILED(m_imeWnd->ActivateLanguageProfile(m_lastActiveProfile)))
+                {
+                    logger::warn("Failed to restore input method profile after enabling IME");
+                }
+                m_lastActiveProfile = GUID_NULL;
+            }
         }
         else
         {
@@ -70,6 +82,28 @@ auto ImeManager::EnableIme(bool enable) -> Result
             // symmetric, otherwise the hidden 0x0 ImeWnd keeps the keyboard
             // focus and the game never receives WM_CHAR again ("keyboard stuck").
             Focus(m_gameHwnd);
+
+            // The system input method (e.g. WeChat/Microsoft Pinyin) follows the
+            // Win32 focus back to the game window and intercepts WASD/keys there,
+            // popping its candidate window or swallowing input. Switch the system
+            // TIP back to the English keyboard so the game receives raw keys. The
+            // profile switch (TF_IPPMF_FORSESSION) only affects this session; the
+            // user's global input method is untouched. InputMethodManager's
+            // OnActivated callback will clear IN_COMPOSING/IN_CAND_CHOOSING as a
+            // side effect, which also fixes a stuck typing state after closing a
+            // mod window while composing.
+            {
+                // Remember the IME the user was using, so EnableIme(true) can restore it.
+                const auto &activeLangProfile = m_imeWnd->GetActiveLangProfile();
+                if (activeLangProfile.guidProfile != GUID_NULL)
+                {
+                    m_lastActiveProfile = activeLangProfile.guidProfile;
+                }
+                if (FAILED(m_imeWnd->ActivateLanguageProfile(DEFAULT_LANG_PROFILE.guidProfile)))
+                {
+                    logger::warn("Failed to switch back to the English keyboard after disabling IME");
+                }
+            }
         }
         if (m_settings.autoToggleKeyboard)
         {

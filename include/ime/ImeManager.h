@@ -18,6 +18,7 @@ class ImeManager final : public IImeModule
     ImeWnd         *m_imeWnd;
     bool            m_isForceUpdate;
     const Settings &m_settings;
+    GUID            m_lastActiveProfile{GUID_NULL}; ///< the IME profile active before disable, restored on re-enable
 
 public:
     ImeManager(HWND hwnd, ImeWnd *imeWnd, Settings &settings) : m_gameHwnd(hwnd), m_imeWnd(imeWnd), m_isForceUpdate(false), m_settings(settings) {}

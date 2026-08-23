@@ -84,6 +84,9 @@ public:
     //! @see ImeController::ActivateLangProfile
     auto ActivateLanguageProfile(const GUID &guidProfile) const -> HRESULT;
 
+    //! Must call from IME thread.
+    auto GetActiveLangProfile() const -> const LangProfile & { return m_inputMethodManager->GetActiveLangProfile(); }
+
     auto GetHWND() const -> HWND { return m_hWnd; }
 
     /**
