@@ -80,3 +80,36 @@
 - 仅剩警告：`atlcomcli_shim.h` 的 `__uuidof` 语言扩展警告（预期内，shim 设计如此）。
 - 新构建脚本：`build_ime.cmd`（vcvars64 + cmake --build，可复用，尚未提交）。
 - 待办/待问用户：① `Settings.h` 中 `autoToggleKeyboard` 结构体默认值 `false`（line 51）vs `GetDefaultSettings()` 中 `true`（line 91）不一致，需确认是否对齐；② 是否提交（含既有未提交 baseline diff + atlcomcli_shim.h）；③ `C：tmp_batbuild_out.log` 全角冒号杂散日志是否删除；④ 5 个 python 改过的文件带 BOM（utf-8-sig）是否去 BOM。
+## 残留 bug 诊断与修复 (2026-08-23 第二轮) ✅ 已修复 b85a786
+
+> 用户实测修复后的 DLL：**"退出mod窗口后依然被识别为输入状态"**（与最初症状同源）。
+
+### 根因（报告后用户批准修改）
+**Bug A 🔴（根因）**：`FixInconsistentTextEntryCount`（EventHandler.cpp:137）存在时序缺陷——
+菜单**关闭事件派发时，正在关闭的菜单仍在 `menuStack` 上**（引擎先派发事件、后出栈）。
+原逻辑遍历栈时遇到该非 always-open 菜单直接 `return`，导致漏检的
+`AllowTextInput(true)` 计数永远不被清理 → `EnableIme(false)` 永不触发 →
+IME 保持激活、焦点留在 0×0 ImeWnd → 游戏吞键。这正是"有时"的成因：
+取决于第三方 mod 是否调用 `AllowTextInput(false)`。
+
+**修复**：遍历时用 `ui->GetMenu(event->menuName).get()`（按名字拿菜单指针，
+BSFixedString 可隐式转 string_view）跳过**正在关闭的那个菜单**，其余非
+always-open 菜单仍在栈上才 return；全部通过则 `EnableIme(false)` + info 日志。
+
+**Bug B 🟡（排查后撤销）**：曾怀疑 `EnableIme(false)` 不清
+`INPUT_PROCESSOR_ACTIVATED` 导致 OnCharEvent 持续吞字符。复查确认**误诊**：
+吞键闸门是 `!ImeDisabled()`，`EnableIme(false)` 本来就会置 `IME_DISABLED`；
+而 `INPUT_PROCESSOR_ACTIVATED` 的恢复只依赖系统 profile 激活事件
+（InputMethodManager.cpp:207/310），`EnableIme(true)` 不经过它——若清除，
+下次启用输入法将直接失效。**已撤销**，不做此改动。
+
+### 日志增强
+- `ImeManager::EnableIme` 两条 debug → **info**（真实状态切换才打，短路不打）。
+- `ImeWnd::AbortIme` 触发时加 **info**。
+- `FixInconsistentTextEntryCount` 兜底触发时加 **info**。
+→ 下次再出问题，游戏 log 直接可见 EnableIme/Abort 切换轨迹。
+
+### 验证
+- 构建：python subprocess build_ime.cmd → **EXIT 0**，DLL @ 11:16（hash 3e5f6da1）。
+- dist/SimpleIME 已同步（cmake --install，hash 一致）。
+- 提交 `b85a786` 已推送 myfork（8b6d981..b85a786）。
