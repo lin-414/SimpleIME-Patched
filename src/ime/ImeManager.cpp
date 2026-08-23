@@ -101,7 +101,7 @@ auto ImeManager::EnableIme(bool enable) -> Result
                 {
                     m_lastActiveProfile = activeLangProfile.guidProfile;
                 }
-                if (FAILED(m_imeWnd->ActivateLanguageProfile(DEFAULT_LANG_PROFILE.guidProfile)))
+                if (FAILED(m_imeWnd->ActivateEnglishProfile()))
                 {
                     logger::warn("Failed to switch back to the English keyboard after disabling IME");
                 }
