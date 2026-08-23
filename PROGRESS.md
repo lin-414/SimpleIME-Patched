@@ -39,40 +39,14 @@
   - WndProc 加 `case CM_ABORT_IME:` → `pThis->m_textService->AbortIme(); return 0;`。
   - ⚠️ **此文件 CM_EXECUTE_TASK 附近缩进被 patch 打乱过两次，最后用 python 脚本按 LF 规范化替换修复。已重新读取确认缩进正确（361-375 行）。**
 
-## 未开始（任务 2-6）—— 明天继续
-
-### 任务 2 🔴 EnableIme(false) 归还焦点
-- 位置：`src/ime/ImeManager.cpp` `ImeManager::EnableIme(bool enable)`（约 37-84 行）。
-- 现状：enable=true 时走 `TryFocusIme()`（AttachThreadInput + SetFocus ImeWnd），enable=false 时 `FocusTextService(false)` 后**没有把焦点还给游戏窗口**，WM_CHAR 仍被 0×0 ImeWnd 吃掉。
-- 方案：禁用分支成功后调用 `ImeManager::Focus(m_gameHwnd)`（Focus 是 static，已处理跨线程 AttachThreadInput + SetFocus），有成员 `m_gameHwnd` 可用。参考 EnableIme(true) 的 TryFocusIme 对称实现。
-
-### 任务 3 🟡 keepImeOpen 反转
-- 位置：`src/ime/ImeController.cpp` `DoEnableIme`（约 189-195 行）：`m_delegate->EnableIme(m_settings->input.keepImeOpen || enable)` —— enable=false 且 keepImeOpen=true 时收到 true，禁用失效。
-- 方案：改为 `m_delegate->EnableIme(enable)`，把 keepImeOpen 覆盖逻辑收敛到 `ImeManager::IsShouldEnableIme()`（那里已有 `keepImeOpen || HasTextEntry()`）。并确认 `EnableMod(false)`（Steam overlay 打开，EventHandler.cpp:61-65 调用）总是真禁用。
-
-### 任务 4 🟡 g_prevTextEntryCount 初始偏移
-- 位置：`src/hooks/ScaleformHook.cpp`（约 148-168 行）—— file-scope static `g_prevTextEntryCount` 初始为 0；若插件加载时输入框已打开（1→0 首次关闭时 oldValue=1 vs prev=0 不相等），`entryCount == oldValue` 守卫会丢掉第一个 EnableIme(false)。
-- 方案：Install 时用当前 `GetTextEntryCount()` 初始化基线；或第一次回调时无条件执行一次 SyncImeState。
-
-### 任务 5 🟢 FixInconsistentTextEntryCount 扩展
-- 位置：`src/core/EventHandler.cpp`。
-- 方案：除 CursorMenu 关闭外，把一致性检查扩展到"菜单关闭后无暂停菜单/输入上下文仍在"的通用场景（留意不要误伤控制台等合理场景），或在 SyncImeState 路径加 textEntryCount vs 实际 IME 状态的一致性校验。
-
-### 任务 6 🟢 DoSyncImeState dirty 丢了
-- 位置：`src/ime/ImeController.cpp` `DoSyncImeState()`（约 243-257 行）—— `m_fDirty.store(false)` 在调 delegate 之前，失败后 dirty 丢失不再重试。
-- 方案：先保存 dirty 值，成功后再清，失败时还原。
-
-### 任务 7 构建验证
-- SimpleIME 构建必须走 `.cmd` 先 `call vcvars64.bat`（BuildTools 无完整 VS），clang-cl 编译；否则 PCH 版本不匹配全 TU 报错。
-- 先验证工具链：LLVM (C:\Program Files\LLVM\bin\clang-cl.exe)、FontForge (C:\Program Files\FontForgeBuilds\bin\fontforge.exe)。
-- 构建目录：build/RelWithDebInfo-clangcl-ninja-vcpkg（已有旧产物）。
-- 详见 skill: windows-cpp-build。
+## 任务 2-6（原"未开始"清单）✅ 已在 cab770e 全部修复
+- 任务2 EnableIme(false) 归还焦点 ✅ / 任务3 keepImeOpen 反转 ✅ / 任务4 g_prevTextEntryCount 基线 ✅ /
+  任务5 FixInconsistentTextEntryCount 通用化 ✅ / 任务6 DoSyncImeState dirty 保留 ✅ / 任务7 构建验证 ✅
 
 ## 构建/工程注意事项
-- 仓库当前未提交，HEAD = a2cd39f "bump version to v2.2.1"。
-- **git 状态快照（2026-08-22 结束时）**：15 个已修改文件，3 个未跟踪文件。本次会话新增修改：`include/configs/CustomMessage.h`、`include/ime/ITextService.h`、`include/tsf/TextStore.h`、`src/ImeWnd.cpp`、`src/ime/Imm32TextService.cpp`、`src/tsf/TextService.cpp`、`src/tsf/TextStore.cpp`；其余 8 个修改文件是本会话前的改动（atomic_bool 转换、SetForegroundWindow 增强、FakeDirectInputDevice 容错、BOM/CRLF 噪音）。未跟踪：`include/atlcomcli_shim.h`（ATL shim，TextStore.cpp 在用，不要删）、`PROGRESS.md`（本文件）、`C：tmp_batbuild_out.log`（全角冒号杂散日志，可删）。
-- 修改过 BOM/行尾的文件（ITextService.h、ImeWnd.cpp、TextStore.h、TextStore.cpp、TextService.cpp、Imm32TextService.cpp、CustomMessage.h）—— 注意 diff 时若看到 BOM/CRLF 噪音属正常。
-- **patch 工具陷阱**：本会话中 patch 多次打乱 C#/C++ switch 块缩进（匹配到错误行导致嵌套错位），修复后用 python 按行尾规范化重写。后续编辑先读文件最新内容再 patch，patch 后立即 read_file 验证。
+- 仓库当前：main 含 cab770e → b85a786 → 7817d6b → c17fde4（修复）→ 7d4f0e5（docs），全部已推送 myfork（lin-414/SimpleIME-Patched）。
+- `include/atlcomcli_shim.h`（ATL shim，TextStore.cpp 在用，**不要删**）；`build_ime.cmd`（vcvars64 + cmake --build）已提交，构建走它。
+- **patch 工具陷阱**：patch 会把 C++ 缩进打乱 / 单引号 char 字面量里的 \r \n 实体化成真实 CR/LF；修复后用 python 按行尾规范化重写（deep-normalize：先 `\r\n`→`\n` 再换回 `\r\n`，避免 `\r\r\n` 双重），改后 read_file 验证 + git diff 确认最小化。
 
 ## 构建验证结果 (2026-08-23) ✅ 全部通过
 - 工具链验证：LLVM clang-cl ✅ / FontForge ✅ / vcvars64 ✅
