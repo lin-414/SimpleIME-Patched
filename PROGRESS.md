@@ -142,3 +142,18 @@ Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法
   `ImeManager.cpp` 调用 `ActivateEnglishProfile()` 替代 `ActivateLanguageProfile(DEFAULT_LANG_PROFILE.guidProfile)`。
 - **构建**：EXIT 0, [10/10], DLL `321ca4d9...`（4,290,560 B），dist 同步。
 - **提交** `a296845` 已推送 myfork（d9937b7..a296845）。
+
+### 25cec80 最终修复（用真实 profile 类型而非硬编码 INPUTPROCESSOR）
+- **问题**：a296845 找到了真实美式键盘 profile（langid==0x409, 真实 CLSID/GUID），但
+  `ActivateProfile(const LangProfile&)` 硬编码了 `TF_PROFILETYPE_INPUTPROCESSOR`（1）。
+  美式键盘在系统 TSF 枚举中是 `TF_PROFILETYPE_KEYBOARDLAYOUT` 类型，类型不匹配导致
+  `ITfInputProcessorProfileMgr::ActivateProfile` 失败，中文输入法保持激活。
+- **用户症状**：ESC 退出 mod 窗口后 IME 状态灯仍亮、按键盘弹候选框——与 a296845 之前完全相同。
+- **根因**：`LangProfile` 结构体没有保存 `dwProfileType` 字段，枚举时丢弃了该信息，
+  `ActivateProfile` 只能猜 `INPUTPROCESSOR`。
+- **修复**（2 文件 +5/-3）：`LangProfile` 加 `DWORD dwProfileType{}` 字段；
+  `RefreshProfiles()` 枚举时保存 `profile.dwProfileType`；
+  `ActivateProfile(const LangProfile&)` 用 `langProfile.dwProfileType` 替代硬编码。
+  `DEFAULT_LANG_PROFILE` 设 `1`（TF_PROFILETYPE_INPUTPROCESSOR，兼容中文输入法通路）。
+- **构建**：EXIT 0, [11/11], DLL `720699e8...`（4,290,560 B），dist 同步。
+- **提交** `25cec80` 已推送 myfork（ecb7919..25cec80）。
