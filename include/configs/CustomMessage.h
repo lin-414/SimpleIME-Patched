@@ -9,5 +9,6 @@ enum CustomMessage
     CM_IME_CHAR,
     CM_IME_COMPOSITION,
     CM_EXECUTE_TASK,
+    CM_ABORT_IME,
 };
 } // namespace Ime

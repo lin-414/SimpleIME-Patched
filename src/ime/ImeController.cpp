@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by jamie on 2025/5/6.
 //
 #include "ime/ImeController.h"
@@ -25,8 +25,8 @@ void ImeController::ApplySettings()
     }
     EnableMod(m_settings->enableMod);
 
-    m_fDirty = true;
-    if (m_fEnabledMod)
+    m_fDirty.store(true);
+    if (m_fEnabledMod.load())
     {
         SyncImeStateIfDirty();
     }
@@ -36,21 +36,21 @@ auto ImeController::EnableMod(bool enable) -> void
 {
     if (!IsReady()) return;
 
-    if (m_fEnabledMod != enable)
+    if (m_fEnabledMod.load() != enable)
     {
         AddTask([this, enable] -> void {
-            const bool prev = m_fEnabledMod;
+            const bool prev = m_fEnabledMod.load();
             if (!prev)
             {
-                m_fEnabledMod = true;
+                m_fEnabledMod.store(true);
             }
             if (IImeModule::IsSuccess(DoEnableMod(enable)))
             {
-                m_fEnabledMod = enable;
-                m_fDirty      = enable;
+                m_fEnabledMod.store(enable);
+                m_fDirty.store(enable);
                 return;
             }
-            m_fEnabledMod = prev;
+            m_fEnabledMod.store(prev);
             ErrorNotifier::GetInstance().Debug(std::format("Unexpected error: EnableMod({}) failed.", enable));
         });
     }
@@ -60,7 +60,10 @@ void ImeController::ActivateLangProfile(const GUID &guidProfile) const
 {
     if (!IsReady()) return;
 
-    AddTask([&] -> void {
+    // FIX: capture guidProfile BY VALUE. AddTask defers execution to the IME
+    // thread; `[&]` would bind a reference to the caller's GUID, which may
+    // already be gone by the time the task runs (use-after-free).
+    AddTask([this, guidProfile] -> void {
         if (IsModEnabled() && FAILED(m_imeWnd->ActivateLanguageProfile(guidProfile)))
         {
             const auto strGuid = WCharUtils::ToString(ToStringFromGUID2(guidProfile));
@@ -146,7 +149,10 @@ auto ImeController::DoEnableMod(const bool enable) -> IImeModule::Result
 {
     const bool shouldEnableIme = enable && (m_settings->input.keepImeOpen || ControlMap::GetSingleton()->HasTextEntry());
 
-    auto result = DoEnableIme(shouldEnableIme);
+    // When disabling the mod (e.g. Steam overlay opens, user unticks enableMod),
+    // the IME must be turned OFF unconditionally — keepImeOpen must not keep it
+    // alive, otherwise the game keeps eating keystrokes while the overlay shows.
+    auto result = DoEnableIme(shouldEnableIme, /*honorKeepImeOpen=*/enable);
 
     bool fResult = IImeModule::IsSuccess(result);
     if (fResult)
@@ -162,7 +168,17 @@ auto ImeController::DoEnableMod(const bool enable) -> IImeModule::Result
         else if (m_gameHIMC != nullptr)
         {
             auto *lastHIMC = ImmAssociateContext(m_gameHwnd, std::exchange(m_gameHIMC, nullptr));
-            assert(lastHIMC == nullptr && "Unexpected non-null HIMC. Any other mod changed it?");
+            // Don't assert here (assertions are compiled out of release builds).
+            // If another mod changed the game's HIMC while we were disabled,
+            // restore the one we saved and warn instead of losing it forever.
+            if (lastHIMC != nullptr)
+            {
+                logger::warn(
+                    "Unexpected non-null HIMC ({:p}) when restoring. Another mod may have "
+                    "associated a new context while SimpleIME was disabled; re-associating our saved one.",
+                    static_cast<void *>(lastHIMC)
+                );
+            }
         }
     }
 
@@ -173,13 +189,18 @@ auto ImeController::DoEnableMod(const bool enable) -> IImeModule::Result
     return fResult ? IImeModule::Result::SUCCESS : IImeModule::Result::FAILED;
 }
 
-auto ImeController::DoEnableIme(bool enable) const -> IImeModule::Result
+auto ImeController::DoEnableIme(const bool enable, const bool honorKeepImeOpen) const -> IImeModule::Result
 {
-    if (!m_fEnabledMod)
+    if (!m_fEnabledMod.load())
     {
         return IImeModule::Result::DISABLED;
     }
-    const auto result = m_delegate->EnableIme(m_settings->input.keepImeOpen || enable);
+    // keepImeOpen means "keep the IME active even when no text entry is open",
+    // which is desirable while the mod is enabled (e.g. typing into the
+    // console). But an explicit disable request (honorKeepImeOpen=false, from
+    // EnableMod(false)) must win — otherwise disabling the mod does nothing.
+    const bool target = honorKeepImeOpen && m_settings->input.keepImeOpen ? true : enable;
+    const auto result = m_delegate->EnableIme(target);
     if (IImeModule::IsSuccess(result))
     {
         if (m_settings->appearance.autoToggleLanguageBar)
@@ -205,7 +226,7 @@ auto ImeController::DoEnableIme(bool enable) const -> IImeModule::Result
 
 auto ImeController::DoForceFocusIme() const -> IImeModule::Result
 {
-    if (!m_fEnabledMod)
+    if (!m_fEnabledMod.load())
     {
         return IImeModule::Result::DISABLED;
     }
@@ -220,7 +241,7 @@ auto ImeController::DoForceFocusIme() const -> IImeModule::Result
 
 auto ImeController::DoTryFocusIme() const -> IImeModule::Result
 {
-    if (!m_fEnabledMod)
+    if (!m_fEnabledMod.load())
     {
         return IImeModule::Result::DISABLED;
     }
@@ -229,27 +250,47 @@ auto ImeController::DoTryFocusIme() const -> IImeModule::Result
 
 auto ImeController::DoSyncImeState() -> IImeModule::Result
 {
-    if (!m_fEnabledMod)
+    if (!m_fEnabledMod.load())
     {
         return IImeModule::Result::DISABLED;
     }
-    m_fDirty          = false;
     const auto result = m_delegate->SyncImeState();
     if (!IImeModule::IsSuccess(result))
     {
         ErrorNotifier::GetInstance().Error("Unexpected error: SyncImeState failed.");
+        // Keep the dirty flag set so a later SyncImeStateIfDirty() retries.
+        // Clearing it before the delegate call would lose the pending state
+        // change forever once the sync fails.
+        m_fDirty.store(true);
         return result;
     }
+    m_fDirty.store(false);
     return result;
 }
 
 auto ImeController::RestoreKeyboard() const -> bool
 {
+    if (m_gameHwnd == nullptr)
+    {
+        logger::error("RestoreKeyboard: game HWND is null.");
+        return false;
+    }
+    // Keep the game window foreground so the DI cooperative-level change
+    // applies. Failure here is not fatal (another app may own the foreground
+    // lock), so only log.
+    if (FALSE == SetForegroundWindow(m_gameHwnd))
+    {
+        logger::debug("RestoreKeyboard: SetForegroundWindow returned FALSE; continuing anyway");
+    }
     logger::debug("Restore keyboard: EXCLUSIVE + FOREGROUND + NOWINKEY.");
     HRESULT hr = E_FAIL;
     if (auto *keyboard = Hooks::FakeDirectInputDevice::GetInstance(); keyboard != nullptr)
     {
         hr = keyboard->TryRestoreCooperativeLevel(m_gameHwnd);
+    }
+    else
+    {
+        logger::error("RestoreKeyboard: FakeDirectInputDevice is not initialized.");
     }
     if (FAILED(hr))
     {
@@ -260,11 +301,25 @@ auto ImeController::RestoreKeyboard() const -> bool
 
 auto ImeController::UnlockKeyboard() const -> bool
 {
+    if (m_gameHwnd == nullptr)
+    {
+        logger::error("UnlockKeyboard: game HWND is null.");
+        return false;
+    }
+    // See RestoreKeyboard: log-only foreground promotion.
+    if (FALSE == SetForegroundWindow(m_gameHwnd))
+    {
+        logger::debug("UnlockKeyboard: SetForegroundWindow returned FALSE; continuing anyway");
+    }
     logger::debug("Unlock keyboard: NONEXCLUSIVE + BACKGROUND.");
     HRESULT hr = E_FAIL;
     if (auto *keyboard = Hooks::FakeDirectInputDevice::GetInstance(); keyboard != nullptr)
     {
         hr = keyboard->TryUnlockCooperativeLevel(m_gameHwnd);
+    }
+    else
+    {
+        logger::error("UnlockKeyboard: FakeDirectInputDevice is not initialized.");
     }
     if (FAILED(hr))
     {

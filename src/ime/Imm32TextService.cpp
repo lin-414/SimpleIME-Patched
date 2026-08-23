@@ -86,6 +86,29 @@ void Imm32TextService::OnEndComposition()
     State::GetInstance().Clear(State::IN_CAND_CHOOSING);
 }
 
+void Imm32TextService::AbortIme()
+{
+    // Clear local state first without calling the callback (no text injection),
+    // then cancel the composition at the system level. The WM_IME_ENDCOMPOSITION
+    // that CPS_CANCEL triggers will arrive later and find an already-empty editor.
+    {
+        const std::scoped_lock lock(m_mutex);
+        m_textEditor.Select(0, 0);
+        m_textEditor.ClearText();
+        m_candidateUi.Close();
+    }
+    if (m_imeHwnd != nullptr)
+    {
+        if (HIMC hIMC = ImmGetContext(m_imeHwnd); hIMC != nullptr)
+        {
+            ImmNotifyIME(hIMC, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+            ImmReleaseContext(m_imeHwnd, hIMC);
+        }
+    }
+    State::GetInstance().Clear(State::IN_COMPOSING);
+    State::GetInstance().Clear(State::IN_CAND_CHOOSING);
+}
+
 auto Imm32TextService::ProcessImeMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) -> bool
 {
     switch (message)

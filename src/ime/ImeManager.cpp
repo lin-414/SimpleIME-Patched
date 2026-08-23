@@ -23,6 +23,7 @@ auto ImeManager::Focus(const HWND hwnd) -> bool
         if (success)
         {
             SetFocus(hwnd);
+            // Always detach, even if SetFocus throws or returns early.
             AttachThreadInput(hwndThread, currentThreadId, FALSE);
         }
     }
@@ -64,6 +65,11 @@ auto ImeManager::EnableIme(bool enable) -> Result
             logger::debug("Set IME_DISABLED and clear TSF focus");
             state.Set(State::IME_DISABLED);
             success = m_imeWnd->FocusTextService(false);
+            // Return the Win32 focus to the game window. EnableIme(true) always
+            // focuses the ImeWnd via TryFocusIme(); the disable path must be
+            // symmetric, otherwise the hidden 0x0 ImeWnd keeps the keyboard
+            // focus and the game never receives WM_CHAR again ("keyboard stuck").
+            Focus(m_gameHwnd);
         }
         if (m_settings.autoToggleKeyboard)
         {
@@ -99,6 +105,21 @@ auto ImeManager::SyncImeState() -> Result
 auto ImeManager::TryFocusIme() -> Result
 {
     logger::debug("ImeManager::{}", __func__);
+
+    // FIX: promote the game's TOP-LEVEL window to foreground first.
+    // SetCooperativeLevel(NONEXCLUSIVE|BACKGROUND) fails silently
+    // (GetLastError() == 0) unless the target window belongs to the
+    // foreground process. SetForegroundWindow promotes it, so the
+    // AttachThreadInput / SetFocus in Focus() actually take effect.
+    // (Focus() itself is static and only receives the hidden WS_CHILD ImeWnd
+    // handle, so the foreground promotion must happen here.)
+    // Note: SetForegroundWindow may legitimately return FALSE (e.g. when
+    // another process owns the foreground lock) - that is not fatal by
+    // itself, so we proceed but log it for diagnosability.
+    if (FALSE == SetForegroundWindow(m_gameHwnd))
+    {
+        logger::debug("SetForegroundWindow(game {:p}) returned FALSE; continuing anyway", static_cast<void *>(m_gameHwnd));
+    }
 
     return ToResult(Focus(m_imeWnd->GetHWND()));
 }

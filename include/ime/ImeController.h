@@ -5,6 +5,8 @@
 #include "ui/Settings.h"
 #include "ui/TaskQueue.h"
 
+#include <atomic>
+
 namespace Ime
 {
 
@@ -21,26 +23,26 @@ public:
     {
         if (IsReady())
         {
-            settings.enableMod = m_fEnabledMod;
+            settings.enableMod = m_fEnabledMod.load();
         }
     }
 
     void SyncImeStateIfDirty()
     {
-        if (m_fDirty)
+        if (m_fDirty.load())
         {
-            m_fDirty = false;
+            m_fDirty.store(false);
             SyncImeState();
         }
     }
 
-    void MarkDirty() { m_fDirty = true; }
+    void MarkDirty() { m_fDirty.store(true); }
 
-    [[nodiscard]] constexpr auto IsDirty() const -> bool { return m_fDirty; }
+    [[nodiscard]] auto IsDirty() const -> bool { return m_fDirty.load(); }
 
     auto IsReady() const -> bool { return m_fInited && (m_imeWnd != nullptr); }
 
-    auto IsModEnabled() const -> bool { return m_fEnabledMod; }
+    auto IsModEnabled() const -> bool { return m_fEnabledMod.load(); }
 
     /**
      * notify @c ImeWnd activate a @c LangProfile by specify guid.
@@ -75,12 +77,12 @@ private:
     ImeWnd                     *m_imeWnd      = nullptr;
     HWND                        m_gameHwnd    = nullptr;
     HIMC                        m_gameHIMC    = nullptr;
-    bool                        m_fDirty      = false;
-    bool                        m_fEnabledMod = false;
+    std::atomic_bool            m_fDirty      = false;
+    std::atomic_bool            m_fEnabledMod = false;
     std::atomic_bool            m_fInited     = false;
 
     auto DoEnableMod(bool enable) -> IImeModule::Result;
-    auto DoEnableIme(bool enable) const -> IImeModule::Result;
+    auto DoEnableIme(bool enable, bool honorKeepImeOpen = true) const -> IImeModule::Result;
     auto DoForceFocusIme() const -> IImeModule::Result;
     auto DoSyncImeState() -> IImeModule::Result;
     auto DoTryFocusIme() const -> IImeModule::Result;

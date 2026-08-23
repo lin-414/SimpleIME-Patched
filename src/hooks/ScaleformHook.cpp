@@ -59,6 +59,20 @@ public:
     static auto AllowTextInput(bool allow) -> std::uint8_t;
     // use our text-entry-count
     static void OnTextEntryCountChanged(std::uint8_t entryCount);
+
+    // Sync the cached previous count with the game's CURRENT text-entry count.
+    // Called right after the hooks are installed: if a text entry is already
+    // open at that point (e.g. another menu opened one during plugin load),
+    // g_prevTextEntryCount must start from the real value, otherwise the first
+    // 1->0 transition would be ignored by the `entryCount == oldValue` guard
+    // in OnTextEntryCountChanged and the IME would stay enabled (stuck keys).
+    static void SyncBaseline()
+    {
+        if (auto *controlMap = Ime::ControlMap::GetSingleton(); controlMap != nullptr)
+        {
+            g_prevTextEntryCount = controlMap->GetTextEntryCount();
+        }
+    }
 };
 
 struct Scaleform_SetScaleModeTypeHook
@@ -218,6 +232,10 @@ void Install()
     installed = true;
     Scaleform_SetScaleModeTypeHook::Install();
     Scaleform_AllowTextInputHook::Install();
+    // Make sure the cached text-entry count starts from the real value, so a
+    // text entry that is already open when we load is not mistaken for a fresh
+    // 0->1 transition (and its eventual close is not swallowed).
+    SKSE_AllowTextInputFnHandler::SyncBaseline();
 }
 
 void Uninstall()

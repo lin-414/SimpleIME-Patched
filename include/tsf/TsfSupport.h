@@ -2,7 +2,7 @@
 #define TSF_TSFSUPPORT_H
 #pragma once
 
-#include <atlcomcli.h>
+#include "atlcomcli_shim.h"
 #include <msctf.h>
 
 namespace Tsf

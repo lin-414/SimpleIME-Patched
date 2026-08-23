@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by jamie on 2025/2/6.
 //
 
@@ -94,12 +94,16 @@ public:
     auto TryRestoreCooperativeLevel(HWND hWnd) -> HRESULT
     {
         HRESULT hr = E_FAIL;
-        if (hWnd != nullptr && m_hWndCooperative == hWnd)
+        // Do not require hWnd to strictly equal m_hWndCooperative:
+        // Skyrim may re-create its backing window (e.g. after full-screen
+        // transition) so a stale handle would otherwise make this always fail.
+        if (hWnd != nullptr)
         {
             if (hr = Unacquire(); SUCCEEDED(hr))
             {
-                logger::debug("Restore CooperativeLevel {:#x}", m_realCooperativeLevelFlags);
-                hr = m_realDevice->SetCooperativeLevel(hWnd, m_realCooperativeLevelFlags);
+                const auto flags = (m_realCooperativeLevelFlags != 0) ? m_realCooperativeLevelFlags : DISCL_EXCLUSIVE | DISCL_FOREGROUND | DISCL_NOWINKEY;
+                logger::debug("Restore CooperativeLevel {:#x}", flags);
+                hr = m_realDevice->SetCooperativeLevel(hWnd, flags);
             }
             Acquire();
         }
@@ -109,11 +113,14 @@ public:
     auto TryUnlockCooperativeLevel(HWND hWnd) -> HRESULT
     {
         HRESULT hr = E_FAIL;
-        if (hWnd != nullptr && m_hWndCooperative == hWnd)
+        // See TryRestoreCooperativeLevel: tolerate a re-created game window.
+        if (hWnd != nullptr)
         {
             if (hr = Unacquire(); SUCCEEDED(hr))
             {
-                hr = m_realDevice->SetCooperativeLevel(hWnd, m_cooperativeLevelFlags);
+                const auto flags = (m_cooperativeLevelFlags != 0) ? m_cooperativeLevelFlags : DISCL_NONEXCLUSIVE | DISCL_BACKGROUND;
+                logger::debug("Unlock CooperativeLevel {:#x}", flags);
+                hr = m_realDevice->SetCooperativeLevel(hWnd, flags);
             }
             Acquire();
         }

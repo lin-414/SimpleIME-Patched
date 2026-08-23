@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-#include <atlcomcli.h>
+#include "atlcomcli_shim.h"
 
 auto Tsf::TsfCompartment::Initialize(
     ITfThreadMgr *pThreadMgr, TfClientId tfClientId, REFGUID guidCompartment, const CompartmentChangeCallback &callback

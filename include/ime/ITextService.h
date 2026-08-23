@@ -63,6 +63,15 @@ public:
 
     virtual auto OnFocus([[maybe_unused]] bool focus) -> bool { return true; }
 
+    /**
+     * @brief Cancel the active composition and clear input state without committing the current composition text.
+     *
+     * Called from the IME thread when the user clicks outside the input area (AbortIme).
+     * The default implementation is a no-op; subclasses (TSF TextService / Imm32TextService)
+     * shall terminate the composition and clear IN_COMPOSING / IN_CAND_CHOOSING state flags.
+     */
+    virtual void AbortIme() {}
+
     virtual auto ToogleKeyboard(bool open) -> void = 0;
 
     virtual auto ProcessImeMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) -> bool = 0;
@@ -141,6 +150,8 @@ public:
     auto CommitCandidate(DWORD index) -> bool override;
 
     auto SetConversionMode(DWORD conversionMode) -> bool override;
+
+    void AbortIme() override;
 
 protected:
     void RequestUpdate(CompositionInfo &compositionInfo, CandidateUi &uiForRead, DirtyFlag flag) override

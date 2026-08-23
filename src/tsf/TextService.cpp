@@ -79,6 +79,29 @@ auto TextService::OnFocus(bool focus) -> bool
     return succeeded;
 }
 
+void TextService::AbortIme()
+{
+    // Clear the composition/candidate content FIRST so the composition-end
+    // callback (OnEndComposition -> SendUiString) receives an already-empty
+    // editor: abort means "cancel without committing", not "commit what is left".
+    {
+        const auto lock = GetWriteLock();
+        m_textEditor.Select(0, 0);
+        m_textEditor.ClearText();
+        m_candidateUi.Close();
+    }
+    if (m_textStore != nullptr)
+    {
+        m_textStore->TerminateComposition();
+    }
+    // Belt and braces: even if no active composition was terminated (e.g. TSF
+    // already ended it), make sure the input state flags are cleared so the menu
+    // code stops treating the game as "still inputting" (which would otherwise
+    // swallow all keyboard input).
+    State::GetInstance().Clear(State::IN_COMPOSING);
+    State::GetInstance().Clear(State::IN_CAND_CHOOSING);
+}
+
 auto TextService::ToogleKeyboard(bool open) -> void
 {
     if (const auto hr = m_keyboardOpenCloseCompartment->SetValue(static_cast<ULONG>(open)); FAILED(hr))

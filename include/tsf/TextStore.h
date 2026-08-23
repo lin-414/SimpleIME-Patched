@@ -9,7 +9,7 @@
 #include "ime/TextEditor.h"
 
 #include <array>
-#include <atlcomcli.h>
+#include "atlcomcli_shim.h"
 #include <msctf.h>
 
 namespace Tsf
@@ -130,6 +130,7 @@ public:
 
     [[nodiscard]] auto Focus() -> HRESULT;
     [[nodiscard]] auto ClearFocus() const -> HRESULT;
+    [[nodiscard]] auto TerminateComposition() const -> HRESULT;
     [[nodiscard]] auto CommitCandidate(UINT index) const -> bool;
 
     auto STDMETHODCALLTYPE AddRef() -> ULONG override;
@@ -283,6 +284,8 @@ public:
     void OnStart(HWND hWnd) override { m_textStore->SetHWND(hWnd); }
 
     auto OnFocus(bool focus) -> bool override;
+
+    void AbortIme() override;
 
     auto ToogleKeyboard(bool open) -> void override;
 

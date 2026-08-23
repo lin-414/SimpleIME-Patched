@@ -7,7 +7,7 @@
 #include "tsf/TsfSupport.h"
 
 #include <InputScope.h>
-#include <atlcomcli.h>
+#include "atlcomcli_shim.h"
 #include <iostream>
 #include <olectl.h>
 #include <string>
@@ -100,6 +100,18 @@ auto TextStore::Focus() -> HRESULT
     return m_threadMgr->AssociateFocus(m_hWnd, m_documentMgr, &m_pPrevDocMgr);
 }
 
+auto TextStore::TerminateComposition() const -> HRESULT
+{
+    if (m_context != nullptr)
+    {
+        if (CComQIPtr<ITfContextOwnerCompositionServices> pComposSvcs(m_context); pComposSvcs != nullptr)
+        {
+            return pComposSvcs->TerminateComposition(nullptr);
+        }
+    }
+    return S_OK;
+}
+
 auto TextStore::ClearFocus() const -> HRESULT
 {
     logger::debug("Clear Focus");
@@ -107,13 +119,7 @@ auto TextStore::ClearFocus() const -> HRESULT
     // Passing nullptr to AssociateFocus suspends the IME state machine instead of
     // cleanly ending it; the next Focus() call may then fail to recover, causing
     // the IME to silently swallow keystrokes without producing output.
-    if (m_context != nullptr)
-    {
-        if (CComQIPtr<ITfContextOwnerCompositionServices> pComposSvcs(m_context); pComposSvcs != nullptr)
-        {
-            pComposSvcs->TerminateComposition(nullptr);
-        }
-    }
+    TerminateComposition();
     // Use an empty (but valid) DocumentMgr instead of nullptr.
     // This tells TSF "focus is here but there is no editable content",
     // allowing the IME to transition cleanly rather than hang.

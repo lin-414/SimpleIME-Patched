@@ -48,7 +48,7 @@ struct Settings
     bool          enableMod                     = true; ///< modify on UI thread every frame.
     bool          enableTsf                     = true;
     bool          fixInconsistentTextEntryCount = true; ///< modify in ToolWindow(ImeMenu). no need sync because ImeMenu is the topmost menu;
-    bool          autoToggleKeyboard            = false;
+    bool          autoToggleKeyboard            = true;
 
     struct Logging
     {

@@ -9,7 +9,7 @@
 #include "ui/ImeOverlay.h"
 #include "ui/ImeWindow.h"
 
-#include <atlcomcli.h>
+#include "atlcomcli_shim.h"
 #include <windows.h>
 
 #pragma comment(lib, "d3d11.lib")

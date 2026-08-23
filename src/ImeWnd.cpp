@@ -275,6 +275,12 @@ void ImeWnd::AbortIme() const
 {
     if (State::GetInstance().HasAny(State::IN_CAND_CHOOSING, State::IN_COMPOSING))
     {
+        // Terminate the active composition on the IME thread, where the TSF/IMM32
+        // objects live (this function is called from the game UI thread). This
+        // really clears IN_COMPOSING / IN_CAND_CHOOSING, so ImeMenu::OnKeyEvent
+        // stops swallowing every key once the user clicks away from the input UI.
+        SendNotifyMessageToIme(CM_ABORT_IME, 0, 0);
+        // Return Win32 focus to the game window (caller thread = game UI thread).
         SetFocus(m_hWndParent);
     }
 }
@@ -354,6 +360,13 @@ auto ImeWnd::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) -> LRES
         }
         case CM_EXECUTE_TASK: {
             TaskQueue::GetInstance().ExecuteImeThreadTasks();
+            return 0;
+        }
+        case CM_ABORT_IME: {
+            if (pThis == nullptr) break;
+            // Runs on the IME thread (WndProc of the IME window), so it is safe
+            // to touch the TSF/IMM32 text service here.
+            pThis->m_textService->AbortIme();
             return 0;
         }
         case WM_IME_SETCONTEXT:

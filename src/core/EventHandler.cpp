@@ -136,13 +136,30 @@ auto MenuOpenCloseEventSink::ProcessEvent(const Event *event, RE::BSTEventSource
 
 void MenuOpenCloseEventSink::FixInconsistentTextEntryCount(const Event *event)
 {
-    // fix: if CursorMenu hide but text-entry count > 0, try to disable ime;
-    // avoid modifying the textEntryCount field
-    if (event->menuName == RE::CursorMenu::MENU_NAME && /**/
-        ControlMap::GetSingleton()->HasTextEntry() && !event->opening)
+    // fix: if a menu hides but the text-entry counter is still > 0 while no
+    // other real (non always-open) menu remains open, some 3rd-party menu
+    // called ControlMap::AllowTextInput(true) without the matching false.
+    // Treat that leaked count as stale and disable the IME, otherwise the game
+    // keeps swallowing keys ("keyboard still in typing mode").
+    // The counter field itself is left untouched (avoid modifying game state
+    // directly); the IME state is what we control.
+    if (event->opening || !ControlMap::GetSingleton()->HasTextEntry())
     {
-        const ImeController *manager = ImeController::GetInstance();
-        manager->EnableIme(false);
+        return;
     }
+    if (auto *ui = RE::UI::GetSingleton(); ui != nullptr)
+    {
+        for (auto &menu : ui->menuStack)
+        {
+            // ImeMenu / CursorMenu etc. are always-open; a real menu still on
+            // the stack means the counter may be legitimately owned by it.
+            if (menu && !menu->AlwaysOpen())
+            {
+                return;
+            }
+        }
+    }
+    const ImeController *manager = ImeController::GetInstance();
+    manager->EnableIme(false);
 }
 } // namespace Ime::Events
