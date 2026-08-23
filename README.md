@@ -1,129 +1,83 @@
-# SimpleIME
+# SimpleIME (Patched)
 
-Native IME (Input Method Editor) support for Skyrim SE/AE — type Chinese, Japanese, Korean and
-other multi-byte languages in the game console and any text field.
+A fork of [cyfewlp/SimpleIME](https://github.com/cyfewlp/SimpleIME) (native IME support for
+Skyrim SE/AE — type Chinese, Japanese, Korean and other multi-byte languages in the game
+console and any text field).
 
-[![Nexus Mods](https://img.shields.io/badge/NexusMods-SimpleIME-orange?style=flat-square&logo=nexusmods)](https://www.nexusmods.com/skyrimspecialedition/mods/140136)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+**Base:** upstream `v2.2.1` (`a2cd39f`) · **License:** MIT
 
-## Features
+> This README only describes what this fork changes. For features, build instructions,
+> configuration and architecture, see the [upstream README](https://github.com/cyfewlp/SimpleIME#readme).
 
-- TSF-based IME integration with candidate list and composition display
-- Follows the in-game text cursor automatically
-- Dynamic theming via Material You (seed-color → full palette)
-- Fully translatable UI (`.toml` translation files, hot-reload)
-- Font picker: choose any installed or local font per script (Latin / CJK / emoji)
+## What's different from upstream
 
-## Getting started
+### Fixes
 
-```bash
-git clone --recurse-submodules https://github.com/cyfewlp/SimpleIME.git
-cd SimpleIME
+1. **Keyboard no longer stuck in typing mode after closing a mod menu**
+   (`ImeWnd::AbortIme` → `CM_ABORT_IME` → `ITextService::AbortIme`)
+
+   Previously `AbortIme()` only returned keyboard focus and never terminated the active
+   TSF/IMM32 composition nor cleared the `IN_COMPOSING` / `IN_CAND_CHOOSING` state flags —
+   so `ImeMenu::OnKeyEvent` kept swallowing every keystroke and the game never received
+   input. Now the composition is genuinely cancelled (TSF: `TerminateComposition`; IMM32:
+   `NI_COMPOSITIONSTR/CPS_CANCEL`) with the editor cleared *before* termination so no
+   partial composition text is committed, and both state flags are dropped.
+
+2. **`EnableIme(false)` returns Win32 keyboard focus to the game window**
+
+   The enable path focused the hidden 0×0 `ImeWnd`, but the disable path never focused
+   back, leaving `WM_CHAR` eaten by the invisible window. Now symmetric:
+   `Focus(m_gameHwnd)` runs after the text service detaches.
+
+3. **`keepImeOpen` no longer inverts disable requests**
+
+   `DoEnableIme` previously computed `keepImeOpen || enable`, turning a `false` request
+   into `true`. Disable is now unconditional (Steam overlay / unchecking "Enable Mod" truly
+   disables), while text-entry closes may still keep the IME open per the setting.
+
+4. **Text-entry counter baseline synced at plugin load**
+
+   The `textEntryCount` change hook started with a baseline of 0; if a text entry was
+   already open when the plugin loaded, the first 1→0 transition was swallowed by the
+   `count == old` guard. `Install()` now seeds the baseline from the current counter.
+
+5. **Inconsistent text-entry counter check generalized**
+
+   Previously only a `CursorMenu` close triggered the consistency repair. Now any menu
+   close that leaves a nonzero text-entry counter with no non-`AlwaysOpen` menu remaining
+   re-syncs the IME state (`FixInconsistentTextEntryCount`, still opt-in).
+
+6. **`DoSyncImeState()` keeps the dirty flag on failure**
+
+   The dirty flag was cleared *before* the delegate call; a failed sync silently forgot the
+   pending state. It is now only cleared on success, so the next sync trigger retries.
+
+### Tuning
+
+- `autoToggleKeyboard` default aligned to `true` (was `false` in the struct but `true` in
+  `GetDefaultSettings()`).
+
+## Installing the fixed build
+
+The built mod layout (for MO2 or manual install) is the same as upstream:
+
+```
+SimpleIME/
+├── SKSE/Plugins/SimpleIME.dll
+└── interface/SimpleIME/ (config, translations, icon font)
 ```
 
-If you already cloned without `--recurse-submodules`:
+Grab a build from **Releases** of this repo, or build from source following the
+[upstream build guide](https://github.com/cyfewlp/SimpleIME#readme).
 
-```bash
-git submodule update --init --recursive
+## Sync with upstream
+
+```
+git fetch upstream && git merge upstream/main
 ```
 
-### Requirements
+(the `upstream` remote should point to `https://github.com/cyfewlp/SimpleIME.git`)
 
-- [Visual Studio 2022](https://visualstudio.microsoft.com/) (Community edition is fine)
-- [LLVM](https://github.com/llvm/llvm-project) — provides `clang-cl`, `clang-format`, `clang-tidy`
-- [CMake](https://cmake.org/) ≥ 4.2
-- [vcpkg](https://github.com/microsoft/vcpkg) — set `VCPKG_ROOT` to the vcpkg folder
-- [FontForge](https://fontforge.org/) — required for icon font generation at configure time
-- Python 3 — required by CMake build scripts
+## License
 
-This project depends on [JamieMods](https://github.com/cyfewlp/JamieMods) as a submodule
-(`extern/JamieMods`), which provides shared build infrastructure and the ImGui/MD3 component library.
-
-## Environment variables
-
-| Variable        | Description                                                              |
-|-----------------|--------------------------------------------------------------------------|
-| `VCPKG_ROOT`    | Path to your vcpkg installation (required)                               |
-| `MO2_MODS_PATH` | _(Optional)_ MO2 mods folder — build output is copied here automatically |
-
-## Configure
-
-**Debug** (default for development):
-```shell
-cmake --preset debug-clangcl-ninja-vcpkg
-```
-
-**Release with debug info** (for distribution testing):
-```shell
-cmake --preset RelWithDebInfo-clangcl-ninja-vcpkg
-```
-
-## Build
-
-```shell
-# configure first if not done yet
-cmake --preset debug-clangcl-ninja-vcpkg
-
-# build the plugin
-cmake --build --preset build-release-clangcl-ninja-vcpkg --target SimpleIME
-
-# package (creates the mod archive)
-cpack --config build/debug-clangcl-ninja-vcpkg/CPackConfig.cmake
-```
-
-For a release build substitute `debug-clangcl-ninja-vcpkg` with
-`relwithdebinfo-clangcl-ninja-vcpkg` or `release-clangcl-ninja-vcpkg`.
-
-## Test
-
-Tests are off by default. Pass `-DBUILD_TESTING=ON` at configure time:
-
-```shell
-cmake --preset debug-clangcl-ninja-vcpkg -DBUILD_TESTING=ON
-cmake --build --preset build-debug-clangcl-ninja-vcpkg --target SimpleIMETest
-ctest --test-dir build/debug-clangcl-ninja-vcpkg/SimpleIME
-```
-
-## Configuration
-
-- **Zero-config required** — the mod runs without a config file. Missing or malformed values fall back to built-in defaults automatically.
-- **Auto-save on exit** — SimpleIME rewrites the config file when the game exits, normalising any manual edits.
-- **MO2 users** — the generated/updated `SimpleIME.toml` may appear in your **Overwrite** folder rather than the mod's own directory.
-
-## Contributing
-
-### Configuration file
-
-The canonical source for all default values is `GetDefaultSettings()` in the code.
-When you add or change a config key, update that function first; the `.toml` file in
-`contrib/config/` is derived from it, not the other way around.
-
-To regenerate `contrib/config/SimpleIME.toml` with current defaults:
-
-1. Delete the existing `SimpleIME.toml` from the game's plugin interface directory.
-2. Launch the game once — SimpleIME writes a fresh file on game quit with all defaults.
-3. Copy the generated file to `contrib/config/SimpleIME.toml`.
-
-> **MO2 users:** the generated file may land in your **Overwrite** folder instead.
-
-## Known issues
-
-### Crash during composition when switching windows via Win+Shift+S
-
-**Trigger:** While a CJK composition is in progress, press **Win+Shift+S** (Snipping Tool) and switch
-focus to another window at the right moment before the capture completes.
-
-**Symptom:** SimpleIME crashes. No PDB is available for that scenario, so the exact call site and
-root cause are unknown.
-
-**Hypothesis:** TSF or IMM32 posts a composition-end message that arrives after ImeWnd or its
-related objects have started tearing down, causing a use-after-free or null-deref inside
-`WM_KILLFOCUS` handling.
-
-## Architecture notes
-
-See [`docs/adr/`](docs/adr/) for Architecture Decision Records.
-
-## Gallery
-
-![SimpleIME.png](contrib/Distribution/SimpleIME.png)
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 cyfewlp. Fork maintenance: lin-414.
