@@ -238,17 +238,21 @@ auto Ime::InputMethodManager::ActivateProfile(const LangProfile &langProfile) ->
         return S_OK;
     }
     const HRESULT hresult = m_tfProfileMgr->ActivateProfile(
-        langProfile.dwProfileType,
-        langProfile.langid,
-        langProfile.clsid,
-        langProfile.guidProfile,
-        langProfile.hkl,
-        TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE
-    );
-    if (FAILED(hresult))
-    {
-        logger::error("Active profile {} failed: {}", langProfile.desc, Tsf::ToErrorMessage(hresult));
-    }
+            langProfile.dwProfileType,
+            langProfile.langid,
+            langProfile.clsid,
+            langProfile.guidProfile,
+            langProfile.hkl,
+            TF_IPPMF_FORPROCESS | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE
+        );
+        if (FAILED(hresult))
+        {
+            logger::error("Active profile {} failed: {}", langProfile.desc, Tsf::ToErrorMessage(hresult));
+        }
+        else
+        {
+            logger::info("Active profile {} OK (type={}, hkl={:p})", langProfile.desc, langProfile.dwProfileType, static_cast<void *>(langProfile.hkl));
+        }
     return hresult;
 }
 
@@ -259,17 +263,40 @@ auto Ime::InputMethodManager::ActivateKeyboardEng() -> HRESULT
     // any actual TSF profile, so calling ActivateProfile(DEFAULT_LANG_PROFILE) may
     // fail silently. Use the real profile GUID from the enumeration instead.
     static constexpr auto LANGID_ENGLISH = 0x409;
+
+    // Load the English keyboard layout to get a validated HKL handle.
+    // The HKL from the TSF enumeration (TF_INPUTPROCESSORPROFILE::hkl) may be stale
+    // or invalid by the time ActivateProfile is called. LoadKeyboardLayout returns
+    // a fresh, valid HKL.
+    const HKL hklEnglish = LoadKeyboardLayout(L"00000409", KLF_ACTIVATE);
+    if (hklEnglish == nullptr)
+    {
+        logger::warn("LoadKeyboardLayout failed for English keyboard, falling back to enumeration HKL");
+        for (const auto &langProfile : m_langProfiles)
+        {
+            if (langProfile.langid == LANGID_ENGLISH)
+            {
+                return ActivateProfile(langProfile);
+            }
+        }
+        logger::warn("No English keyboard profile found in langProfiles, falling back to DEFAULT_LANG_PROFILE");
+        return ActivateProfile(DEFAULT_LANG_PROFILE);
+    }
+
     for (const auto &langProfile : m_langProfiles)
     {
         if (langProfile.langid == LANGID_ENGLISH)
         {
-            return ActivateProfile(langProfile);
+            // Use the fresh LoadKeyboardLayout HKL, which should be a valid handle
+            LangProfile englishProfile = langProfile;
+            englishProfile.hkl = hklEnglish;
+            return ActivateProfile(englishProfile);
         }
     }
-    // Fallback: activate the default profile stub (may work if the system has
-    // an English keyboard registered as a TIP with default GUIDs).
-    logger::warn("No English keyboard profile found in langProfiles, falling back to DEFAULT_LANG_PROFILE");
-    return ActivateProfile(DEFAULT_LANG_PROFILE);
+
+    // Fallback: use LoadKeyboardLayout HKL with a synthetic profile.
+    logger::warn("No English keyboard profile found in langProfiles, activating via LoadKeyboardLayout HKL");
+    return ActivateProfile(LangProfile{"English", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENGLISH, TF_PROFILETYPE_KEYBOARDLAYOUT, hklEnglish});
 }
 
 auto Ime::InputMethodManager::GetActiveLangProfile() -> const LangProfile &
