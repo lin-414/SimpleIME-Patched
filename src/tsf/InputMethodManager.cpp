@@ -186,7 +186,8 @@ auto Ime::InputMethodManager::RefreshProfiles() -> bool
                     profile.clsid,
                     profile.guidProfile,
                     profile.langid,
-                    profile.dwProfileType
+                    profile.dwProfileType,
+                    profile.hkl
                 );
             }
         }
@@ -241,7 +242,7 @@ auto Ime::InputMethodManager::ActivateProfile(const LangProfile &langProfile) ->
         langProfile.langid,
         langProfile.clsid,
         langProfile.guidProfile,
-        nullptr,
+        langProfile.hkl,
         TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE
     );
     if (FAILED(hresult))
