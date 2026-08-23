@@ -35,9 +35,10 @@ struct LangProfile
     CLSID       clsid{};
     GUID        guidProfile{};
     LANGID      langid{};
+    DWORD       dwProfileType{};
 };
 
-inline const auto DEFAULT_LANG_PROFILE = LangProfile{"English(UK)", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENG};
+inline const auto DEFAULT_LANG_PROFILE = LangProfile{"English(UK)", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENG, 1};
 
 inline auto ToStringFromGUID2(const GUID &guid) -> std::wstring
 {

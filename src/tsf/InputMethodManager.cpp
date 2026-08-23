@@ -185,7 +185,8 @@ auto Ime::InputMethodManager::RefreshProfiles() -> bool
                     WCharUtils::ToString(language),
                     profile.clsid,
                     profile.guidProfile,
-                    profile.langid
+                    profile.langid,
+                    profile.dwProfileType
                 );
             }
         }
@@ -236,7 +237,7 @@ auto Ime::InputMethodManager::ActivateProfile(const LangProfile &langProfile) ->
         return S_OK;
     }
     const HRESULT hresult = m_tfProfileMgr->ActivateProfile(
-        TF_PROFILETYPE_INPUTPROCESSOR,
+        langProfile.dwProfileType,
         langProfile.langid,
         langProfile.clsid,
         langProfile.guidProfile,
