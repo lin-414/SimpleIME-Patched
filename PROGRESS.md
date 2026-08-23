@@ -157,3 +157,14 @@ Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法
   `DEFAULT_LANG_PROFILE` 设 `1`（TF_PROFILETYPE_INPUTPROCESSOR，兼容中文输入法通路）。
 - **构建**：EXIT 0, [11/11], DLL `720699e8...`（4,290,560 B），dist 同步。
 - **提交** `25cec80` 已推送 myfork（ecb7919..25cec80）。
+
+### 42dfdc2 最终修复（传递 HKL 而非 nullptr）
+- **问题**：25cec80 修复了 `dwProfileType` 硬编码，但 `ActivateProfile` 仍传 `nullptr` 给 `hkl` 参数。
+  `ITfInputProcessorProfileMgr::ActivateProfile` 对 `TF_PROFILETYPE_KEYBOARDLAYOUT` 类型需要传入实际的
+  **键盘布局句柄（HKL）**，而非 nullptr。传入 nullptr 让 API 静默接受请求但不实际切换输入法。
+- **根因**：`LangProfile` 没有保存 `hkl` 字段。枚举时 `TF_INPUTPROCESSORPROFILE` 结构体包含 `hkl`
+  （美式键盘有真实 HKL 句柄，中文 TIP 的 hkl 为 NULL），但枚举代码没保存它。
+- **修复**（2 文件 +6/-3）：`LangProfile` 加 `HKL hkl{}` 字段；`RefreshProfiles()` 保存
+  `profile.hkl`；`ActivateProfile(const LangProfile&)` 传 `langProfile.hkl` 替代 `nullptr`。
+- **构建**：EXIT 0, [11/11], DLL `daf6a8b8...`（4,290,560 B），dist 同步。
+- **提交** `42dfdc2` 已推送 myfork（361d2e7..42dfdc2）。
