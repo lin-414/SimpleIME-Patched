@@ -113,3 +113,41 @@ always-open 菜单仍在栈上才 return；全部通过则 `EnableIme(false)` + 
 - 构建：python subprocess build_ime.cmd → **EXIT 0**，DLL @ 11:16（hash 3e5f6da1）。
 - dist/SimpleIME 已同步（cmake --install，hash 一致）。
 - 提交 `b85a786` 已推送 myfork（8b6d981..b85a786）。
+## 残留 bug 诊断与修复 (2026-08-23 第三轮) ✅ 已修复 c17fde4
+
+> 用户实测第二轮 DLL 后补充关键症状：**"游戏内 IME 状态显示一直都有，有时按下键盘无反应，有时会弹出 IME 的候选框"**。
+> 这些现象映射到三个残留机制，全部在本轮修复。
+
+### 根因（报告后用户批准修改）
+
+**Bug C 🔴（主因）**：`EnableIme(false)` 只做了"置 IME_DISABLED + 清 TSF 焦点 + 还
+Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法是中文 TIP
+（微信输入法/微软拼音），它跟随 Win32 焦点回到游戏窗口后重新激活 → 
+按 WASD 弹候选框 / 吞键。`DoEnableMod(true)` 对游戏窗口摘除 IMM 上下文
+的防护只在 mod 开关时执行一次，且 TSF 输入法不受其约束。
+
+**Bug D 🟡（副因）**：`ImeMenu::OnKeyEvent` 吞键只看 `IN_COMPOSING`、不检查
+`IME_DISABLED`。IMM32 路径（enableTsf=false）`OnFocus(false)` 只解除关联、
+不终止组合，`IN_COMPOSING` 残留 → 组合状态永吞键，表现为"按键无反应"。
+
+**Bug E 🟢（显现）**：`INPUT_PROCESSOR_ACTIVATED` 反映"系统输入法激活"，
+一直为 true → 调试窗/状态显示里输入状态灯常亮。
+
+### 修复
+1. **`ImeManager::EnableIme` 状态机 + 系统输入法联动**（ImeManager.cpp）：
+   - **disable 分支**：先记住当前激活的中文输入法 profile（
+     `GetActiveLangProfile()`），再 `ActivateLanguageProfile(DEFAULT_LANG_PROFILE)` 
+     切到美式键盘。`TF_IPPMF_FORSESSION` 只生效于当前会话，不碰系统全局输入法；
+     触发 `InputMethodManager::OnActivated` 回调后自动
+     `Clear(IN_COMPOSING/IN_CAND_CHOOSING)` + `INPUT_PROCESSOR_ACTIVATED=false` ——
+     **候选框不再弹、吞键解除、状态灯熄灭，一次全解**。
+   - **enable 分支**：`FocusTextService(true)` 后恢复记住的中文输入法，输入框内照常中文打字。
+   - `ImeManager.h` 新增 `GUID m_lastActiveProfile` 缓存；`ImeWnd.hpp` 新增
+     `GetActiveLangProfile()` 访问器。
+2. **`ImeMenu::OnKeyEvent` 加 `IME_DISABLED` 门控**（ImeMenu.cpp）：仅当
+   `!state.ImeDisabled() && state.IsImeInputting()` 才 `kHandled`，禁用后永不吞键。
+
+### 验证
+- 构建：python subprocess build_ime.cmd → **EXIT 0**（12/12 relink），DLL @ 12:14（hash 6eb99f69）。
+- dist/SimpleIME 已同步（cmake --install，hash 一致）。
+- 提交 `c17fde4` 已推送 myfork（7817d6b..c17fde4），远程已验证。
