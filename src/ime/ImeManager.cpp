@@ -91,7 +91,9 @@ auto ImeManager::EnableIme(bool enable) -> Result
             // user's global input method is untouched. InputMethodManager's
             // OnActivated callback will clear IN_COMPOSING/IN_CAND_CHOOSING as a
             // side effect, which also fixes a stuck typing state after closing a
-            // mod window while composing.
+            // mod window while composing. Uses the real English keyboard profile
+            // from the TSF enumeration (with actual CLSID/GUID), not the stub
+            // DEFAULT_LANG_PROFILE which may fail to activate.
             {
                 // Remember the IME the user was using, so EnableIme(true) can restore it.
                 const auto &activeLangProfile = m_imeWnd->GetActiveLangProfile();

@@ -250,6 +250,26 @@ auto Ime::InputMethodManager::ActivateProfile(const LangProfile &langProfile) ->
     return hresult;
 }
 
+auto Ime::InputMethodManager::ActivateKeyboardEng() -> HRESULT
+{
+    // Find the English keyboard profile in the loaded profiles list and activate it.
+    // DEFAULT_LANG_PROFILE has CLSID_NULL/GUID_NULL — stub values that don't match
+    // any actual TSF profile, so calling ActivateProfile(DEFAULT_LANG_PROFILE) may
+    // fail silently. Use the real profile GUID from the enumeration instead.
+    static constexpr auto LANGID_ENGLISH = 0x409;
+    for (const auto &langProfile : m_langProfiles)
+    {
+        if (langProfile.langid == LANGID_ENGLISH)
+        {
+            return ActivateProfile(langProfile);
+        }
+    }
+    // Fallback: activate the default profile stub (may work if the system has
+    // an English keyboard registered as a TIP with default GUIDs).
+    logger::warn("No English keyboard profile found in langProfiles, falling back to DEFAULT_LANG_PROFILE");
+    return ActivateProfile(DEFAULT_LANG_PROFILE);
+}
+
 auto Ime::InputMethodManager::GetActiveLangProfile() -> const LangProfile &
 {
     if (m_activatedProfile >= m_langProfiles.size())

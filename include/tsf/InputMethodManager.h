@@ -34,6 +34,7 @@ public:
     auto RefreshProfiles() -> bool;
     auto UpdateActiveProfile() noexcept -> bool;
     auto ActivateProfile(const GUID &guidProfile) -> HRESULT;
+    auto ActivateKeyboardEng() -> HRESULT;
 
 private:
     auto ActivateProfile(const LangProfile &langProfile) -> HRESULT;

@@ -87,6 +87,9 @@ public:
     //! Must call from IME thread.
     auto GetActiveLangProfile() const -> const LangProfile & { return m_inputMethodManager->GetActiveLangProfile(); }
 
+    //! Must call from IME thread. Switch to the English keyboard (langid 0x409).
+    auto ActivateEnglishProfile() const -> HRESULT { return m_inputMethodManager->ActivateKeyboardEng(); }
+
     auto GetHWND() const -> HWND { return m_hWnd; }
 
     /**
