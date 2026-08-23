@@ -149,16 +149,23 @@ void MenuOpenCloseEventSink::FixInconsistentTextEntryCount(const Event *event)
     }
     if (auto *ui = RE::UI::GetSingleton(); ui != nullptr)
     {
+        // The menu that just closed may still be on the stack when the close
+        // event is dispatched (the engine pops it right after), so skip it:
+        // otherwise this check bails on the very menu we are reacting to and
+        // the leaked text-entry count is never fixed.
+        const auto closingMenu = ui->GetMenu(event->menuName).get();
         for (auto &menu : ui->menuStack)
         {
-            // ImeMenu / CursorMenu etc. are always-open; a real menu still on
-            // the stack means the counter may be legitimately owned by it.
-            if (menu && !menu->AlwaysOpen())
+            // ImeMenu / CursorMenu etc. are always-open; a real menu (other
+            // than the one that is closing) still on the stack means the
+            // counter may be legitimately owned by it.
+            if (menu && menu.get() != closingMenu && !menu->AlwaysOpen())
             {
                 return;
             }
         }
     }
+    logger::info("No real menu left on the stack but text-entry count is still > 0, forcing IME off");
     const ImeController *manager = ImeController::GetInstance();
     manager->EnableIme(false);
 }

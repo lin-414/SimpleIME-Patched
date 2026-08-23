@@ -56,13 +56,13 @@ auto ImeManager::EnableIme(bool enable) -> Result
         bool success = false;
         if (enable)
         {
-            logger::debug("Clear IME_DISABLED and set TSF focus");
+            logger::info("IME enabled: clearing IME_DISABLED, focusing TSF");
             state.Clear(State::IME_DISABLED);
             success = m_imeWnd->FocusTextService(true);
         }
         else
         {
-            logger::debug("Set IME_DISABLED and clear TSF focus");
+            logger::info("IME disabled: setting IME_DISABLED, clearing TSF focus");
             state.Set(State::IME_DISABLED);
             success = m_imeWnd->FocusTextService(false);
             // Return the Win32 focus to the game window. EnableIme(true) always

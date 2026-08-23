@@ -275,6 +275,7 @@ void ImeWnd::AbortIme() const
 {
     if (State::GetInstance().HasAny(State::IN_CAND_CHOOSING, State::IN_COMPOSING))
     {
+        logger::info("Aborting IME composition and releasing keyboard focus");
         // Terminate the active composition on the IME thread, where the TSF/IMM32
         // objects live (this function is called from the game UI thread). This
         // really clears IN_COMPOSING / IN_CAND_CHOOSING, so ImeMenu::OnKeyEvent
