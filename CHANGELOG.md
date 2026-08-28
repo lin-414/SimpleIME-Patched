@@ -1,3 +1,18 @@
+## [2.2.2] - 2026-08-28
+
+### 🐛 Bug Fixes
+
+- Heal the leaked text-entry counter that kept the IME and language bar stuck "on" after leaving a mod window (event-based repair plus a new every-frame poll with a stability grace, and re-sync of the hook's cached count)
+- Exclude SimpleIME's own ToolWindowMenu from the counter-ownership check — it blinded the repair exactly while the leaked state kept the bar alive (self-sustaining stuck state, only F2 helped)
+- Re-assert the English keyboard layout whenever the game thread drifts back to a non-English one while the IME is disabled (`WM_INPUTLANGCHANGE` watchdog + `WM_INPUTLANGCHANGEREQUEST`)
+- Drive language-bar show/hide from `ImeManager::EnableIme` so every disable path hides the bar (paths that bypassed the old request site left it stuck visible with the game paused)
+- Fix the language-bar pin button (could never unpin)
+- Restore `INPUT_PROCESSOR_ACTIVATED` semantics — narrowing it broke text forwarding for keyboard-layout users; the status light now checks the profile type at the display site
+- Match keyboard-layout profiles by HKL instead of the shared GUID_NULL, match English variants via PRIMARYLANGID, route GUID_NULL activation to the real English keyboard, and stop using the DEFAULT_LANG_PROFILE stub as an activation target
+
+
+**Full Changelog**: https://github.com/lin-414/SimpleIME-Patched/compare/v2.2.1...v2.2.2
+
 ## [2.2.1] - 2026-04-20
 
 ### 🐛 Bug Fixes
