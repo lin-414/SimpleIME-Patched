@@ -168,3 +168,60 @@ Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法
   `profile.hkl`；`ActivateProfile(const LangProfile&)` 传 `langProfile.hkl` 替代 `nullptr`。
 - **构建**：EXIT 0, [11/11], DLL `daf6a8b8...`（4,290,560 B），dist 同步。
 - **提交** `42dfdc2` 已推送 myfork（361d2e7..42dfdc2）。
+
+## 第四轮：代码审查 + "ESC 后仍在 IME 状态" 最终修复 (2026-08-28) ✅ 用户确认解决
+
+> 42dfdc2 之后用户仍报告"退出 mod 界面后还在 IME 状态/按键盘弹候选框/语言栏面板滞留"。
+> 本轮先做全面代码审查（8 项发现），再经 5 次构建/测试迭代逐层定位，最终确认**两个叠加根因**。
+
+### 审查修复（提交于本轮 fix 提交）
+- 🔴 **撤销 `INPUT_PROCESSOR_ACTIVATED` 语义收紧**：该标志门控 ImeWnd `WM_CHAR` 转发与 ImeMenu
+  `OnCharEvent` 吞事件——收紧为"仅 INPUTPROCESSOR"会让英文键盘用户完全无法输入。恢复原语义，
+  "状态灯常亮"改在 `DrawImeStates` 显示端按 `dwProfileType` 判断。
+- `ForceEnglishKeyboardOnGameThread` 重写：`AttachThreadInput` 不会让 `ActivateKeyboardLayout`
+  作用到其它线程 → 改 `PostMessage(WM_INPUTLANGCHANGEREQUEST)`（语言栏的正规做法）。
+- `ActivateProfile` "已激活即短路"仅对 INPUTPROCESSOR 生效；键盘布局按 `hkl` 匹配缓存索引；
+  `GUID_NULL` 激活请求路由到 `ActivateKeyboardEng()`；英文匹配改 `PRIMARYLANGID`（en-GB 等）；
+  `DEFAULT_LANG_PROFILE` 降级为纯显示桩、不再是激活目标。
+- `ImeWnd::AbortIme` 线程感知（仅游戏线程 `SetFocus`）；Scaleform 防抖 250ms→50ms 且
+  `SyncImeStateIfDirty` 移到门控后（否则经 IME 线程绕过防抖）；错乱缩进全部 clang-format。
+
+### 迭代 1-2：布局看门狗 + overlay 汇合点
+- **布局漂移**：OS/输入法会在激活变化时重新套用窗口记住的中文输入法（日志实测 disable 22 秒后
+  漂移）。新增 `WM_INPUTLANGCHANGE` 看门狗（MainWndProc）：mod 启用且 IME 禁用时布局漂移回
+  非英文 → 立即重新请求英文。
+- **面板滞留**：overlay 显示/隐藏请求原在 `ImeController::DoEnableIme`，而 SyncImeState 等
+  路径绕过它 → 收拢到 `ImeManager::EnableIme` 唯一汇合点（任何 disable 必发隐藏请求）。
+- 图钉按钮修复：原实现固定后点 PIN_OFF 图标仍设 `pinned=true`，永远无法解钉 → 改为切换。
+
+### 迭代 3：游戏线程 TSF 激活（已撤销）
+- 曾加 `ActivateKeyboardEngOnCurrentThread()` 试图在游戏线程 COM 单元激活英文 profile——
+  **游戏主线程 COM 是 MTA**，`CoInitializeEx(STA)` 永远失败 `0x80010106`。且用户确认候选框是
+  SimpleIME 自绘（`ImeWindow::Draw` 门控 `!ImeDisabled() && IsImeInputting()`）→ 组合发生在
+  IME 线程，游戏线程 TIP 层并非可见症状根因。整体移除，保留 HKL 看门狗。
+
+### 迭代 4-5：两个叠加根因 ✅
+1. **文本框计数泄漏**（日志实锤：`No real menu left on the stack but text-entry count is
+   still > 0`）：mod 菜单 `AllowTextInput(true)` 无配对 false，且泄漏可能落在菜单关闭事件
+   **之后**（事件时计数为 0，旧检查跳过）→ 无后续事件纠正，IME+面板永久卡启用态。
+   修复：`HealLeakedTextEntryCount()`（计数归零 + `Hooks::Scaleform::ResetTextEntryCountCache()`
+   同步 hook 缓存，否则后续 0→1 检测失效）；事件版修复治愈计数；新增每帧轮询
+   `PollTextEntryCountConsistency`（ImeMenu::PostDisplay 调用）：计数>0 + 稳定 2 秒 grace
+   （避开 ShowMenu 排队入栈竞态）+ 无真实菜单 → 治愈 + 强制关 IME。
+2. **自持循环**：面板显示期间自家 `ToolWindowMenu`（非 AlwaysOpen）常驻菜单栈，被"真实菜单"
+   判定误认为计数拥有者 → 修复机制恰好被卡住状态自身蒙蔽（只有 F2 能临时藏面板）。
+   修复：`HasRealMenuOnStack` 与事件版修复均排除 `ToolWindowMenuName`（它从不拥有文本框计数，
+   其文本输入走 ImeWnd）。
+
+### 验证 (2026-08-28 23:26 会话) ✅
+- DLL `547bfab9...`（4,306,432 B），构建 EXIT 0，dist/ 与 C:\Program Files (x86)\SimpleIME 同步一致。
+- 日志签名：泄漏两次发生均被即时捕获（`healing counter and forcing IME off`）、面板自动隐藏、
+  重新启用时微信输入法立即恢复（`m_lastTipProfileGuid` 跟踪，不受英文键盘缓存覆盖影响）、
+  布局漂移被看门狗纠正。**用户确认问题解决。**
+
+### 工程注意事项（新增）
+- 游戏主线程 COM 为 MTA——任何"在游戏线程用 TSF/STA COM"的方案都不可行，勿重试。
+- dist 同步方式：`cp build/.../SimpleIME.dll dist/SimpleIME/SKSE/Plugins/`（cmake --install
+  前缀是 C:\Program Files (x86)\SimpleIME，不是 dist/）。
+- 用户 MO2（E:\Skyrim AE）装有两个 SimpleIME 文件夹，启用的是 `SimpleIME`（`中文输入 SimpleIME`
+  已禁用，enable_mod=false，勿混淆其配置）。
