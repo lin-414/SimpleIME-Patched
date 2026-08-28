@@ -5,6 +5,7 @@
 #include "ui/ImeOverlay.h"
 
 #include "i18n/translator_manager.h"
+#include "log.h"
 #include "menu/MenuNames.h"
 #include "path_utils.h"
 #include "utils/Utils.h"
@@ -55,10 +56,19 @@ void HandleRequestAndSyncOverlayState(Settings::RuntimeData &runtimeData)
     if (std::exchange(runtimeData.requestShowOverlay, false))
     {
         runtimeData.overlayShowing = true;
+        logger::info("Language bar shown");
     }
-    else if (std::exchange(runtimeData.requestHideOverlay, false) && !runtimeData.overlayPinned)
+    else if (std::exchange(runtimeData.requestHideOverlay, false))
     {
-        runtimeData.overlayShowing = false;
+        if (runtimeData.overlayPinned)
+        {
+            logger::info("Language bar hide request ignored (pinned)");
+        }
+        else
+        {
+            runtimeData.overlayShowing = false;
+            logger::info("Language bar hidden");
+        }
     }
 }
 } // namespace

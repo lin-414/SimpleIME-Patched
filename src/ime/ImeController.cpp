@@ -201,26 +201,13 @@ auto ImeController::DoEnableIme(const bool enable, const bool honorKeepImeOpen) 
     // EnableMod(false)) must win — otherwise disabling the mod does nothing.
     const bool target = honorKeepImeOpen && m_settings->input.keepImeOpen ? true : enable;
     const auto result = m_delegate->EnableIme(target);
-    if (IImeModule::IsSuccess(result))
-    {
-        if (m_settings->appearance.autoToggleLanguageBar)
-        {
-            if (enable)
-            {
-                m_settings->runtimeData.requestShowOverlay = true;
-                m_settings->runtimeData.requestHideOverlay = false;
-            }
-            else
-            {
-                m_settings->runtimeData.requestShowOverlay = false;
-                m_settings->runtimeData.requestHideOverlay = true;
-            }
-        }
-    }
-    else
+    if (!IImeModule::IsSuccess(result))
     {
         ErrorNotifier::GetInstance().Warning(std::format("Unexpected error: EnableIme({}) failed.", enable));
     }
+    // Note: the language-bar overlay show/hide requests are driven by
+    // ImeManager::EnableIme (the single funnel every enable/disable path goes
+    // through) — NOT here, since the SyncImeState paths bypass DoEnableIme.
     return result;
 }
 

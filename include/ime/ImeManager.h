@@ -17,7 +17,7 @@ class ImeManager final : public IImeModule
     HWND            m_gameHwnd;
     ImeWnd         *m_imeWnd;
     bool            m_isForceUpdate;
-    const Settings &m_settings;
+    Settings       &m_settings; ///< non-const: EnableIme writes runtimeData overlay requests (IME thread only, by design).
     GUID            m_lastActiveProfile{GUID_NULL}; ///< the IME profile active before disable, restored on re-enable
 
 public:
@@ -42,5 +42,6 @@ public:
 
 private:
     auto IsShouldEnableIme() const -> bool;
+    auto ForceEnglishKeyboardOnGameThread() const -> void;
 };
 } // namespace Ime

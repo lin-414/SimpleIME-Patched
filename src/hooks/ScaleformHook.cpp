@@ -10,6 +10,7 @@
 #include "ime/ImeController.h"
 #include "log.h"
 
+#include <chrono>
 #include <memory>
 
 namespace Hooks::Scaleform
@@ -51,6 +52,13 @@ public:
 class SKSE_AllowTextInputFnHandler final : public RE::GFxFunctionHandler
 {
     static inline std::uint8_t g_prevTextEntryCount = 0;
+    // Timestamp of the last 1->0 (disable) transition, used to debounce the
+    // enable/disable jitter that ESC produces while a mod window is closing
+    // (AllowTextInput toggles 0->1->0 in quick succession). Without this, the
+    // IME is re-enabled (restoring WeChat/Pinyin) right before the final
+    // disable lands, leaving the system TIP and SimpleIME in a half-cleaned
+    // state ("still typing after ESC").
+    static inline std::chrono::steady_clock::time_point g_lastDisableTime{};
 
 public:
     void Call(Params &params) override;
@@ -170,13 +178,33 @@ void SKSE_AllowTextInputFnHandler::OnTextEntryCountChanged(std::uint8_t entryCou
 
     g_prevTextEntryCount = entryCount;
     auto *imeManager     = Ime::ImeController::GetInstance();
-    imeManager->SyncImeStateIfDirty();
     if (oldValue == 0)
     {
+        // Debounce: ESC-closing a mod window can toggle 0->1->0 within a few
+        // milliseconds (menu stack churn). Re-enabling in between restores the
+        // Chinese TIP right before the final disable lands, leaving a messy
+        // half-cleaned state. 50ms only eats that churn — a human re-opening
+        // another text field takes far longer, so their enable still runs.
+        const auto elapsed = std::chrono::steady_clock::now() - g_lastDisableTime;
+        if (elapsed < std::chrono::milliseconds(50))
+        {
+            logger::debug(
+                "Text entry re-enabled {}ms after disable, keeping IME off",
+                std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+            );
+            // Return BEFORE SyncImeStateIfDirty: DoSyncImeState would call
+            // EnableIme(IsShouldEnableIme()) on the IME thread and bypass this
+            // debounce (HasTextEntry() is true right now). A dirty flag, if any,
+            // survives and a later sync trigger retries — by design.
+            return;
+        }
+        imeManager->SyncImeStateIfDirty();
         imeManager->EnableIme(true);
     }
     else if (entryCount == 0)
     {
+        g_lastDisableTime = std::chrono::steady_clock::now();
+        imeManager->SyncImeStateIfDirty();
         imeManager->EnableIme(false);
     }
 }
@@ -235,6 +263,13 @@ void Install()
     // Make sure the cached text-entry count starts from the real value, so a
     // text entry that is already open when we load is not mistaken for a fresh
     // 0->1 transition (and its eventual close is not swallowed).
+    SKSE_AllowTextInputFnHandler::SyncBaseline();
+}
+
+void ResetTextEntryCountCache()
+{
+    // The counter was corrected outside the hook (leak repair in EventHandler);
+    // re-sync the cached previous value so the next transition detects properly.
     SKSE_AllowTextInputFnHandler::SyncBaseline();
 }
 

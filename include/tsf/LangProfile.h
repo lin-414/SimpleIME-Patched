@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <msctf.h>
 #include <string>
 #include <winnt.h>
 
@@ -39,7 +40,11 @@ struct LangProfile
     HKL         hkl{};
 };
 
-inline const auto DEFAULT_LANG_PROFILE = LangProfile{"English(UK)", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENG, 1, 0};
+// Display-only stub (returned by GetActiveLangProfile() when nothing is cached).
+// NEVER an activation target: a KEYBOARDLAYOUT profile needs a real HKL, and
+// CLSID_NULL/GUID_NULL match no actual TSF profile. ActivateKeyboardEng() builds
+// the real profile from the TSF enumeration instead.
+inline const auto DEFAULT_LANG_PROFILE = LangProfile{"English(UK)", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENG, TF_PROFILETYPE_KEYBOARDLAYOUT, 0};
 
 inline auto ToStringFromGUID2(const GUID &guid) -> std::wstring
 {

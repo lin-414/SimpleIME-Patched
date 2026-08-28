@@ -73,9 +73,12 @@ auto Draw(bool &pinned, bool &toolWindowShowing, const LangProfile &activeLangPr
         ImGui::SameLine();
 
         constexpr auto iconButtonColors = ImGuiEx::M3::Spec::IconButtonColors::Standard;
+        // Toggle, not just set: when pinned the button renders ICON_PIN_OFF, and
+        // assigning `true` here made it impossible to unpin from the button (the
+        // only escape hatch was the overlay shortcut).
         if (ImGuiEx::M3::SmallIconButton(pinned ? static_cast<std::string_view>(ICON_PIN_OFF) : ICON_PIN, iconButtonColors))
         {
-            pinned = true;
+            pinned = !pinned;
         }
 
         ImGui::SameLine();

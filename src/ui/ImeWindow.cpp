@@ -18,6 +18,7 @@
 #include "imguiex/ImGuiEx.h"
 #include "imguiex/imguiex_enum_wrap.h"
 #include "imguiex/imguiex_m3.h"
+#include "log.h"
 #include "imguiex/m3/facade/base.h"
 #include "utils/InputFocusAnchor.h"
 
@@ -215,6 +216,17 @@ void ImeWindow::Draw(const CompositionInfo &compositionInfo, const CandidateUi &
     if (currentFrame > m_lastShowFrame + 1)
     {
         UpdateImeWindowPos(settings.input.posUpdatePolicy, m_imePos);
+        // Diagnostic edge trigger: fires exactly when the composition/candidate
+        // window (re)appears after not being drawn. Correlating this with the
+        // enable/disable / overlay logs pins down which state transition the
+        // user-visible "IME still active after ESC" symptom belongs to.
+        logger::info(
+            "Candidate window became visible (composing={}, tsfFocus={}, overlayShowing={}, overlayPinned={})",
+            state.IsImeInputting(),
+            state.TsfFocus(),
+            settings.runtimeData.overlayShowing,
+            settings.runtimeData.overlayPinned
+        );
     }
     m_lastShowFrame = currentFrame;
     ClampWindowToViewport(settings.input.posUpdatePolicy, m_imePos, m_imeSize, m_lastAutoPosDir);

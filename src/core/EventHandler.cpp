@@ -3,6 +3,7 @@
 #include "ImeApp.h"
 #include "ImeWnd.hpp"
 #include "RE/ControlMap.h"
+#include "hooks/ScaleformHook.h"
 #include "ime/ImeController.h"
 #include "log.h"
 #include "menu/MenuNames.h"
@@ -17,6 +18,8 @@
 #include <RE/I/InputEvent.h>
 #include <RE/M/MainMenu.h>
 #include <RE/U/UI.h>
+
+#include <chrono>
 
 namespace Ime::Events
 {
@@ -64,6 +67,46 @@ void OnSteamOverlayMenu(bool open)
     {
         manager->EnableMod(true);
     }
+}
+
+/// True when any real (non always-open) menu is on the stack. A legitimate text
+/// field always lives inside such a menu. Our own ToolWindowMenu never owns a
+/// text-entry count (its text input goes through ImeWnd, not AllowTextInput) —
+/// and since it is pushed whenever the language bar is visible, counting it as
+/// "real" would blind the leak repair exactly while the leaked state keeps the
+/// bar (and thus that menu) alive: a self-sustaining stuck state.
+auto HasRealMenuOnStack() -> bool
+{
+    if (auto *ui = RE::UI::GetSingleton(); ui != nullptr)
+    {
+        const auto toolWindowMenu = ui->GetMenu(ToolWindowMenuName).get();
+        for (const auto &menu : ui->menuStack)
+        {
+            if (menu && menu.get() != toolWindowMenu && !menu->AlwaysOpen())
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Decrement the text-entry counter to 0 and re-sync the Scaleform hook's cache.
+/// The counter leaks whenever a menu calls AllowTextInput(true) without the
+/// matching false (churn around ESC-closes); a leaked counter keeps the IME and
+/// the language bar stuck on and desynchronizes every later 0->1 transition.
+void HealLeakedTextEntryCount()
+{
+    auto *controlMap = ControlMap::GetSingleton();
+    if (controlMap == nullptr)
+    {
+        return;
+    }
+    while (controlMap->GetTextEntryCount() > 0)
+    {
+        (void)controlMap->SKSE_AllowTextInput(false);
+    }
+    Hooks::Scaleform::ResetTextEntryCountCache();
 }
 
 } // namespace
@@ -139,10 +182,9 @@ void MenuOpenCloseEventSink::FixInconsistentTextEntryCount(const Event *event)
     // fix: if a menu hides but the text-entry counter is still > 0 while no
     // other real (non always-open) menu remains open, some 3rd-party menu
     // called ControlMap::AllowTextInput(true) without the matching false.
-    // Treat that leaked count as stale and disable the IME, otherwise the game
-    // keeps swallowing keys ("keyboard still in typing mode").
-    // The counter field itself is left untouched (avoid modifying game state
-    // directly); the IME state is what we control.
+    // Treat that leaked count as stale: heal the counter to 0 and disable the
+    // IME, otherwise the game keeps swallowing keys ("keyboard still in typing
+    // mode") and the language bar stays up.
     if (event->opening || !ControlMap::GetSingleton()->HasTextEntry())
     {
         return;
@@ -152,21 +194,67 @@ void MenuOpenCloseEventSink::FixInconsistentTextEntryCount(const Event *event)
         // The menu that just closed may still be on the stack when the close
         // event is dispatched (the engine pops it right after), so skip it:
         // otherwise this check bails on the very menu we are reacting to and
-        // the leaked text-entry count is never fixed.
-        const auto closingMenu = ui->GetMenu(event->menuName).get();
+        // the leaked text-entry count is never fixed. Our own ToolWindowMenu is
+        // skipped too — see HasRealMenuOnStack: it is pushed whenever the
+        // language bar is visible and never owns a text-entry count.
+        const auto closingMenu    = ui->GetMenu(event->menuName).get();
+        const auto toolWindowMenu = ui->GetMenu(ToolWindowMenuName).get();
         for (auto &menu : ui->menuStack)
         {
             // ImeMenu / CursorMenu etc. are always-open; a real menu (other
             // than the one that is closing) still on the stack means the
             // counter may be legitimately owned by it.
-            if (menu && menu.get() != closingMenu && !menu->AlwaysOpen())
+            if (menu && menu.get() != closingMenu && menu.get() != toolWindowMenu && !menu->AlwaysOpen())
             {
                 return;
             }
         }
     }
-    logger::info("No real menu left on the stack but text-entry count is still > 0, forcing IME off");
+    logger::info("No real menu left on the stack but text-entry count is still > 0, healing counter and forcing IME off");
+    HealLeakedTextEntryCount();
     const ImeController *manager = ImeController::GetInstance();
     manager->EnableIme(false);
+}
+
+void PollTextEntryCountConsistency()
+{
+    if (!ImeApp::GetInstance().GetSettings().fixInconsistentTextEntryCount)
+    {
+        return;
+    }
+    auto *controlMap = ControlMap::GetSingleton();
+    if (controlMap == nullptr || !controlMap->HasTextEntry())
+    {
+        return;
+    }
+    // Stability grace: ShowMenu is queued — a menu that just called
+    // AllowTextInput(true) may not be pushed onto the stack for another frame
+    // or two. Only treat the state as leaked once the count has been stable
+    // (and no owner menu ever showed up) for a while.
+    static std::uint8_t                          s_lastSeenCount = 0;
+    static std::chrono::steady_clock::time_point s_lastChange    = std::chrono::steady_clock::now();
+    const auto                                   count           = controlMap->GetTextEntryCount();
+    if (count != s_lastSeenCount)
+    {
+        s_lastSeenCount = count;
+        s_lastChange    = std::chrono::steady_clock::now();
+        return;
+    }
+    if (std::chrono::steady_clock::now() - s_lastChange < std::chrono::seconds(2))
+    {
+        return;
+    }
+    if (HasRealMenuOnStack())
+    {
+        return;
+    }
+    // The event-based repair above only runs on menu-close events; when the
+    // leaking AllowTextInput(true) lands AFTER its menu's close event (the
+    // counter was already 0 at event time), no further event may fire for a
+    // long time — the IME and the language bar then stay stuck "on" until the
+    // user happens to open another menu. Poll instead and repair here.
+    logger::info("Text-entry count {} survived with no menu to own it — healing counter and forcing IME off", count);
+    HealLeakedTextEntryCount();
+    ImeController::GetInstance()->EnableIme(false);
 }
 } // namespace Ime::Events

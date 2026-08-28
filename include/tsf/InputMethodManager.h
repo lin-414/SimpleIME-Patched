@@ -42,6 +42,12 @@ private:
 public:
     auto GetActiveLangProfile() -> const LangProfile &;
 
+    /// GUID of the last real TIP (input processor, e.g. WeChat/Microsoft Pinyin)
+    /// that activated in this process. Unlike the active-profile cache it is NOT
+    /// overwritten when a plain keyboard layout activates, so it always answers
+    /// "which IME did the user last use" — used to restore the TIP on re-enable.
+    [[nodiscard]] auto GetLastTipProfileGuid() const -> const GUID & { return m_lastTipProfileGuid; }
+
     [[nodiscard]] auto GetLangProfiles() const -> const std::vector<LangProfile> & { return m_langProfiles; }
 
     auto QueryInterface(const IID &riid, void **ppvObject) -> HRESULT override;
@@ -60,6 +66,7 @@ private:
     DWORD                                m_refCount{};
     DWORD                                m_dwCookie{};
     uint32_t                             m_activatedProfile = 0;
+    GUID                                 m_lastTipProfileGuid{GUID_NULL};
 };
 } // namespace Ime
 

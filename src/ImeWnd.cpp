@@ -276,12 +276,19 @@ void ImeWnd::AbortIme() const
     if (State::GetInstance().HasAny(State::IN_CAND_CHOOSING, State::IN_COMPOSING))
     {
         logger::info("Aborting IME composition and releasing keyboard focus");
-        // Terminate the active composition on the IME thread, where the TSF/IMM32
-        // objects live (this function is called from the game UI thread). This
-        // really clears IN_COMPOSING / IN_CAND_CHOOSING, so ImeMenu::OnKeyEvent
-        // stops swallowing every key once the user clicks away from the input UI.
-        SendNotifyMessageToIme(CM_ABORT_IME, 0, 0);
-        // Return Win32 focus to the game window (caller thread = game UI thread).
+    }
+    // Terminate any active composition on the IME thread, where the TSF/IMM32
+    // objects live. Sent unconditionally: the state flags can be stale, and
+    // TerminateComposition is a no-op when nothing is composing. SendNotifyMessage
+    // runs the WndProc inline on the IME thread (e.g. from EnableIme(false)) and
+    // posts asynchronously from the game UI thread (e.g. ImeMenu click-to-abort).
+    SendNotifyMessageToIme(CM_ABORT_IME, 0, 0);
+    // Return Win32 focus to the game window — only possible from the game UI
+    // thread. SetFocus to a window owned by another thread fails unless the
+    // input queues are attached (ImeManager::Focus does that dance; the disable
+    // path calls it right after us, so skipping here is correct).
+    if (GetCurrentThreadId() == m_gameThreadId)
+    {
         SetFocus(m_hWndParent);
     }
 }
@@ -582,6 +589,13 @@ void ImeWnd::DrawImeStates()
 
     // clang-format off
     const auto & conversionMode = state.GetConversionMode();
+    // INPUT_PROCESSOR_ACTIVATED means "any known profile is active" (it gates
+    // text forwarding), so the light must additionally check the profile type:
+    // only a real TIP (input processor) is an IME — a plain keyboard layout
+    // (e.g. the English keyboard switched to on disable) must leave it off.
+    const bool inputProcessorActive =
+        state.Has(Core::State::INPUT_PROCESSOR_ACTIVATED) && m_inputMethodManager != nullptr &&
+        m_inputMethodManager->GetActiveLangProfile().dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR;
     stateIcon(textServiceFocused);                                 ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("TEXT_SERVICE_FOCUS");
     stateIcon(state.Has(Core::State::IN_COMPOSING));        ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("IN_COMPOSING");
     stateIcon(state.Has(Core::State::IN_CAND_CHOOSING));    ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("IN_CAND_CHOOSING");
@@ -596,7 +610,7 @@ void ImeWnd::DrawImeStates()
     stateIcon(conversionMode.IsEudc());                     ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("CMode: EUDC"); ImGui::SameLine();
     stateIcon(conversionMode.IsSymbol());                   ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("CMode: SYMBOL"); ImGui::SameLine();
     stateIcon(conversionMode.IsFixed());                    ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("CMode: FIXED");
-    stateIcon(state.Has(Core::State::INPUT_PROCESSOR_ACTIVATED)); ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("INPUT_PROCESSOR_ACTIVATED");
+    stateIcon(inputProcessorActive);                        ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("INPUT_PROCESSOR_ACTIVATED");
     stateIcon(state.Has(Core::State::IME_DISABLED));        ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("IME_DISABLED");
     stateIcon(state.Has(Core::State::GAME_LOADING));        ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("GAME_LOADING");
     stateIcon(state.Has(Core::State::KEYBOARD_OPEN));       ImGui::SameLine(); ImGuiEx::M3::AlignedLabel("KEYBOARD_OPEN");

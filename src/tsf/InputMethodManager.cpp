@@ -14,12 +14,26 @@
 
 namespace
 {
-auto GetProfileCachedIndex(const std::vector<Ime::LangProfile> &langProfiles, const GUID &guidProfile) -> std::uint32_t
+auto GetProfileCachedIndex(const std::vector<Ime::LangProfile> &langProfiles, const GUID &guidProfile, HKL hkl = nullptr) -> std::uint32_t
 {
+    if (guidProfile != GUID_NULL)
+    {
+        // Real TIPs (input processors) carry unique profile GUIDs.
+        const auto it = std::ranges::find_if(langProfiles, [&](const auto &p) -> bool {
+            return p.guidProfile == guidProfile;
+        });
+        if (it != langProfiles.end())
+        {
+            return static_cast<std::uint32_t>(std::ranges::distance(langProfiles.begin(), it));
+        }
+        return UINT32_MAX;
+    }
+    // Keyboard-layout profiles all share guidProfile == GUID_NULL; matching by
+    // GUID alone would always hit the first layout in the list regardless of
+    // which layout is actually active. Disambiguate by the layout handle.
     const auto it = std::ranges::find_if(langProfiles, [&](const auto &p) -> bool {
-        return p.guidProfile == guidProfile;
+        return p.dwProfileType == TF_PROFILETYPE_KEYBOARDLAYOUT && p.hkl == hkl;
     });
-
     if (it != langProfiles.end())
     {
         return static_cast<std::uint32_t>(std::ranges::distance(langProfiles.begin(), it));
@@ -205,7 +219,13 @@ auto Ime::InputMethodManager::UpdateActiveProfile() noexcept -> bool
     TF_INPUTPROCESSORPROFILE profile;
     if (SUCCEEDED(m_tfProfileMgr->GetActiveProfile(GUID_TFCAT_TIP_KEYBOARD, &profile)))
     {
-        m_activatedProfile = GetProfileCachedIndex(m_langProfiles, profile.guidProfile);
+        m_activatedProfile = GetProfileCachedIndex(m_langProfiles, profile.guidProfile, profile.hkl);
+        // Semantics: "any profile known to us is active". This flag gates text
+        // forwarding (ImeWnd WM_CHAR) and char-event swallowing (ImeMenu) — do
+        // NOT narrow it to INPUTPROCESSOR-only, users whose active input method
+        // is a plain keyboard layout (e.g. English-only systems) would lose all
+        // text input. Whether a real TIP (vs. a keyboard layout) is active is
+        // checked at the display site via the profile type instead.
         Core::State::GetInstance().Set(State::INPUT_PROCESSOR_ACTIVATED, m_activatedProfile < m_langProfiles.size());
         return true;
     }
@@ -218,7 +238,11 @@ auto Ime::InputMethodManager::ActivateProfile(const GUID &guidProfile) -> HRESUL
 {
     if (guidProfile == DEFAULT_LANG_PROFILE.guidProfile)
     {
-        return ActivateProfile(DEFAULT_LANG_PROFILE);
+        // GUID_NULL is not an activatable profile: keyboard layouts all share
+        // it, and DEFAULT_LANG_PROFILE itself is a display-only stub (CLSID_NULL
+        // / GUID_NULL / no HKL match nothing in TSF). Interpret "activate the
+        // default" as "switch to the English keyboard".
+        return ActivateKeyboardEng();
     }
 
     const auto index = GetProfileCachedIndex(m_langProfiles, guidProfile);
@@ -232,37 +256,49 @@ auto Ime::InputMethodManager::ActivateProfile(const GUID &guidProfile) -> HRESUL
 
 auto Ime::InputMethodManager::ActivateProfile(const LangProfile &langProfile) -> HRESULT
 {
-    const auto &activeLangProfile = GetActiveLangProfile();
-    if (IsEqualGUID(langProfile.guidProfile, activeLangProfile.guidProfile) == TRUE)
+    // Keyboard layout profiles (TF_PROFILETYPE_KEYBOARDLAYOUT) ALL share
+    // guidProfile == GUID_NULL. The "already active" shortcut below would match
+    // against whatever GetActiveLangProfile() returns — including DEFAULT_LANG_PROFILE
+    // (also GUID_NULL) when the cached activated index is stale or out of range —
+    // so ActivateProfile() would ALWAYS return S_OK here without ever calling the
+    // TSF API, leaving the Chinese TIP active and eating keystrokes. Only real TIPs
+    // (INPUTPROCESSOR) carry distinguishable GUIDs; apply the shortcut to them alone.
+    if (langProfile.dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR)
     {
-        return S_OK;
+        const auto &activeLangProfile = GetActiveLangProfile();
+        if (IsEqualGUID(langProfile.guidProfile, activeLangProfile.guidProfile) == TRUE)
+        {
+            logger::debug("Profile '{}' already active, skip activation", langProfile.desc);
+            return S_OK;
+        }
     }
     const HRESULT hresult = m_tfProfileMgr->ActivateProfile(
-            langProfile.dwProfileType,
-            langProfile.langid,
-            langProfile.clsid,
-            langProfile.guidProfile,
-            langProfile.hkl,
-            TF_IPPMF_FORPROCESS | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE
-        );
-        if (FAILED(hresult))
-        {
-            logger::error("Active profile {} failed: {}", langProfile.desc, Tsf::ToErrorMessage(hresult));
-        }
-        else
-        {
-            logger::info("Active profile {} OK (type={}, hkl={:p})", langProfile.desc, langProfile.dwProfileType, static_cast<void *>(langProfile.hkl));
-        }
+        langProfile.dwProfileType,
+        langProfile.langid,
+        langProfile.clsid,
+        langProfile.guidProfile,
+        langProfile.hkl,
+        TF_IPPMF_FORPROCESS | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE
+    );
+    if (FAILED(hresult))
+    {
+        logger::error("Active profile {} failed: {}", langProfile.desc, Tsf::ToErrorMessage(hresult));
+    }
+    else
+    {
+        logger::info("Active profile {} OK (type={}, hkl={:p})", langProfile.desc, langProfile.dwProfileType, static_cast<void *>(langProfile.hkl));
+    }
     return hresult;
 }
 
 auto Ime::InputMethodManager::ActivateKeyboardEng() -> HRESULT
 {
-    // Find the English keyboard profile in the loaded profiles list and activate it.
+    // Find an English keyboard profile in the loaded profiles list and activate it.
     // DEFAULT_LANG_PROFILE has CLSID_NULL/GUID_NULL — stub values that don't match
-    // any actual TSF profile, so calling ActivateProfile(DEFAULT_LANG_PROFILE) may
-    // fail silently. Use the real profile GUID from the enumeration instead.
-    static constexpr auto LANGID_ENGLISH = 0x409;
+    // any actual TSF profile, so it is never a valid activation target; use the
+    // real profile from the enumeration instead.
+    // PRIMARYLANGID matching covers all English variants (en-US 0x409, en-GB 0x809, ...).
+    static constexpr auto LANGID_ENGLISH_PRIMARY = PRIMARYLANGID(LANGID_ENG);
 
     // Load the English keyboard layout to get a validated HKL handle.
     // The HKL from the TSF enumeration (TF_INPUTPROCESSORPROFILE::hkl) may be stale
@@ -274,29 +310,51 @@ auto Ime::InputMethodManager::ActivateKeyboardEng() -> HRESULT
         logger::warn("LoadKeyboardLayout failed for English keyboard, falling back to enumeration HKL");
         for (const auto &langProfile : m_langProfiles)
         {
-            if (langProfile.langid == LANGID_ENGLISH)
+            if (PRIMARYLANGID(langProfile.langid) == LANGID_ENGLISH_PRIMARY)
             {
                 return ActivateProfile(langProfile);
             }
         }
-        logger::warn("No English keyboard profile found in langProfiles, falling back to DEFAULT_LANG_PROFILE");
-        return ActivateProfile(DEFAULT_LANG_PROFILE);
+        logger::error("No English keyboard profile found in langProfiles and LoadKeyboardLayout failed; cannot switch to English");
+        return E_FAIL;
     }
 
     for (const auto &langProfile : m_langProfiles)
     {
-        if (langProfile.langid == LANGID_ENGLISH)
+        if (PRIMARYLANGID(langProfile.langid) == LANGID_ENGLISH_PRIMARY)
         {
             // Use the fresh LoadKeyboardLayout HKL, which should be a valid handle
             LangProfile englishProfile = langProfile;
-            englishProfile.hkl = hklEnglish;
-            return ActivateProfile(englishProfile);
+            englishProfile.hkl         = hklEnglish;
+            const HRESULT hresult      = ActivateProfile(englishProfile);
+            // ActivateProfile returning S_OK does NOT mean the system input method
+            // actually switched: for KEYBOARDLAYOUT profiles TSF often reports
+            // success while leaving the current process input method untouched
+            // (observed with WeChat IME / Microsoft Pinyin). Force the PROCESS
+            // keyboard layout at the Imm32/Win32 level — TSF TIPs follow the active
+            // keyboard layout and deactivate with it, so this is the authoritative
+            // switch. Always do it (not just on FAILED) and verify the result.
+            if (ActivateKeyboardLayout(hklEnglish, KLF_SETFORPROCESS) == nullptr)
+            {
+                logger::warn("ActivateKeyboardLayout(KLF_SETFORPROCESS) failed: {}", GetLastError());
+            }
+            else
+            {
+                const auto currentLayout = GetKeyboardLayout(0); // current thread layout
+                logger::info(
+                    "ActivateKeyboardLayout(KLF_SETFORPROCESS) OK, current={:p}, english={:p}{}",
+                    static_cast<void *>(currentLayout),
+                    static_cast<void *>(hklEnglish),
+                    currentLayout != hklEnglish ? " (MISMATCH!)" : ""
+                );
+            }
+            return hresult;
         }
     }
 
     // Fallback: use LoadKeyboardLayout HKL with a synthetic profile.
     logger::warn("No English keyboard profile found in langProfiles, activating via LoadKeyboardLayout HKL");
-    return ActivateProfile(LangProfile{"English", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENGLISH, TF_PROFILETYPE_KEYBOARDLAYOUT, hklEnglish});
+    return ActivateProfile(LangProfile{"English", "ENG", "English", CLSID_NULL, GUID_NULL, LANGID_ENG, TF_PROFILETYPE_KEYBOARDLAYOUT, hklEnglish});
 }
 
 auto Ime::InputMethodManager::GetActiveLangProfile() -> const LangProfile &
@@ -343,8 +401,8 @@ auto Ime::InputMethodManager::Release() -> ULONG
 }
 
 auto Ime::InputMethodManager::OnActivated(
-    [[maybe_unused]] DWORD dwProfileType, [[maybe_unused]] LANGID langid, [[maybe_unused]] const IID &clsid, [[maybe_unused]] const GUID &catid,
-    const GUID &guidProfile, [[maybe_unused]] HKL hkl, DWORD dwFlags
+    DWORD dwProfileType, [[maybe_unused]] LANGID langid, [[maybe_unused]] const IID &clsid, [[maybe_unused]] const GUID &catid,
+    const GUID &guidProfile, HKL hkl, DWORD dwFlags
 ) -> HRESULT
 {
     if ((dwFlags & TF_IPSINK_FLAG_ACTIVE) != 0)
@@ -354,9 +412,28 @@ auto Ime::InputMethodManager::OnActivated(
 
         UpdateConversionAndKeyboard(state);
 
-        m_activatedProfile          = GetProfileCachedIndex(m_langProfiles, guidProfile);
-        const auto isInputProcessor = dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR && m_activatedProfile < m_langProfiles.size();
-        state.Set(State::INPUT_PROCESSOR_ACTIVATED, isInputProcessor);
+        m_activatedProfile = GetProfileCachedIndex(m_langProfiles, guidProfile, hkl);
+        // Same semantics as UpdateActiveProfile: any known profile counts.
+        // See the comment there — do not narrow to INPUTPROCESSOR-only.
+        Core::State::GetInstance().Set(State::INPUT_PROCESSOR_ACTIVATED, m_activatedProfile < m_langProfiles.size());
+        // Track the last REAL input processor (WeChat/Microsoft Pinyin etc.) that
+        // activated. Keyboard-layout activations must not overwrite this — the
+        // disable path switches to the English keyboard, which would otherwise
+        // erase the memory of which IME the user was typing with.
+        if (dwProfileType == TF_PROFILETYPE_INPUTPROCESSOR && m_activatedProfile < m_langProfiles.size())
+        {
+            m_lastTipProfileGuid = guidProfile;
+        }
+        if (m_activatedProfile < m_langProfiles.size())
+        {
+            logger::info(
+                "Input method activated: '{}' (type={}, hkl={:p}, flags={:#x})",
+                m_langProfiles[m_activatedProfile].desc,
+                dwProfileType,
+                static_cast<void *>(hkl),
+                dwFlags
+            );
+        }
         state.Clear(State::IN_CAND_CHOOSING);
         state.Clear(State::IN_COMPOSING);
     }

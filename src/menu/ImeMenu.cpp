@@ -8,6 +8,7 @@
 #include "RE/G/GFxEvent.h"
 #include "RE/U/UI.h"
 #include "RE/U/UIMessage.h"
+#include "core/EventHandler.h"
 #include "core/State.h"
 #include "ime/ImeController.h"
 #include "log.h"
@@ -234,6 +235,10 @@ void ImeMenu::PostDisplay()
     }
     m_imeCharEvents.clear();
     auto &imeApp = ImeApp::GetInstance();
+
+    // Game thread, every frame: repair a leaked text-entry counter even when no
+    // menu event fires after the leak (see Events::PollTextEntryCountConsistency).
+    Events::PollTextEntryCountConsistency();
 
     const auto oldToolWindowShowing = imeApp.GetSettings().runtimeData.toolWindowShowing;
 

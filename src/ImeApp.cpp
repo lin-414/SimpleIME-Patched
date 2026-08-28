@@ -404,6 +404,44 @@ auto ImeApp::MainWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) -> 
             app.Uninitialize();
             return 0;
         }
+        case WM_INPUTLANGCHANGE: {
+            // Sent after the game thread's keyboard layout actually changed —
+            // the confirmation point for ForceEnglishKeyboardOnGameThread()'s
+            // WM_INPUTLANGCHANGEREQUEST.
+            const auto hkl = reinterpret_cast<HKL>(lParam);
+            logger::info("Game window input language changed, layout={:p}", static_cast<void *>(hkl));
+            // Watchdog: Windows (and some IMEs) re-apply the window's remembered
+            // input method — the user's Chinese TIP — on activation changes, even
+            // long after the IME was disabled (observed in the game log: the game
+            // thread drifting back to 0x08040804 ~20s after a clean disable). That
+            // resurrects the "still in IME state" symptom: the Chinese IME is
+            // active on the game thread again and pops candidates on WASD. While
+            // the mod is enabled but the IME is disabled, the game must receive
+            // raw keys, so re-request the English layout whenever the game thread
+            // drifts back to a non-English one. Loop-safe: the re-request ends in
+            // an English WM_INPUTLANGCHANGE, which fails the check below. When the
+            // mod itself is disabled we must not fight the user's own input method,
+            // hence the IsModEnabled() gate.
+            if (ImeController::GetInstance()->IsModEnabled() && Core::State::GetInstance().ImeDisabled())
+            {
+                const auto langid = static_cast<LANGID>(reinterpret_cast<uintptr_t>(hkl) & 0xFFFF);
+                if (hkl != nullptr && PRIMARYLANGID(langid) != PRIMARYLANGID(LANGID_ENG))
+                {
+                    // HKL-level re-assert. Loop-safe: the request ends in an
+                    // English WM_INPUTLANGCHANGE, which fails the check above.
+                    // (A TSF-level activation on this thread is impossible: the
+                    // game thread runs an MTA, where TSF is unsupported — and
+                    // moot anyway, since user-visible composition happens on the
+                    // IME thread's own document.)
+                    if (const HKL hklEnglish = LoadKeyboardLayoutW(L"00000409", 0); hklEnglish != nullptr && hklEnglish != hkl)
+                    {
+                        PostMessageW(hWnd, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(hklEnglish));
+                    }
+                    logger::info("Game thread drifted to a non-English layout while the IME is disabled, re-asserting English");
+                }
+            }
+            break;
+        }
         default:
             break;
     }

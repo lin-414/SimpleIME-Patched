@@ -34,6 +34,57 @@ auto ImeManager::Focus(const HWND hwnd) -> bool
     return success;
 }
 
+auto ImeManager::ForceEnglishKeyboardOnGameThread() const -> void
+{
+    // TSF profile activation and ActivateKeyboardLayout(KLF_SETFORPROCESS)
+    // (both done in ActivateKeyboardEng on the IME thread) never change the
+    // layout of the already-running game main thread: keyboard layouts are
+    // per-thread, and keystrokes for the game window are translated on the
+    // thread that owns it. AttachThreadInput does not help either — it only
+    // shares focus/capture state, not layouts. The documented way to switch
+    // another thread's layout is to ask the window itself: DefWindowProc
+    // handles WM_INPUTLANGCHANGEREQUEST by activating the layout on the
+    // owning thread (the same thing the taskbar language bar does). The game
+    // window is foreground at this point (the disable path restored focus),
+    // and our hooked MainWndProc forwards the message to the original
+    // WndProc/DefWindowProc, so this reaches the game thread.
+    if (m_gameHwnd == nullptr)
+    {
+        return;
+    }
+    const DWORD gameThreadId = GetWindowThreadProcessId(m_gameHwnd, nullptr);
+    if (gameThreadId == 0)
+    {
+        return;
+    }
+    // Load (without activating — ActivateKeyboardEng already activated it on
+    // the IME thread) to get a valid HKL. "00000409" is the en-US layout,
+    // present on practically every system; it is installed if missing.
+    const HKL hklEnglish = LoadKeyboardLayout(L"00000409", 0);
+    if (hklEnglish == nullptr)
+    {
+        logger::warn("ForceEnglishKeyboardOnGameThread: LoadKeyboardLayout failed, error {}", GetLastError());
+        return;
+    }
+    const auto layoutBefore = GetKeyboardLayout(gameThreadId);
+    if (layoutBefore == hklEnglish)
+    {
+        logger::debug("Game thread ({}) already uses the English layout {:p}", gameThreadId, static_cast<void *>(hklEnglish));
+        return;
+    }
+    if (PostMessageW(m_gameHwnd, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(hklEnglish)) == FALSE)
+    {
+        logger::warn("ForceEnglishKeyboardOnGameThread: PostMessage(WM_INPUTLANGCHANGEREQUEST) failed, error {}", GetLastError());
+        return;
+    }
+    logger::info(
+        "Requested English layout {:p} for the game thread {} (was {:p}); WM_INPUTLANGCHANGE in the log confirms the switch",
+        static_cast<void *>(hklEnglish),
+        gameThreadId,
+        static_cast<void *>(layoutBefore)
+    );
+}
+
 auto ImeManager::EnableIme(bool enable) -> Result
 {
     logger::debug("ImeManager::{} {}", __func__, enable ? "enable" : "disable");
@@ -53,6 +104,29 @@ auto ImeManager::EnableIme(bool enable) -> Result
     {
         m_isForceUpdate = false;
 
+        // Drive the language-bar overlay from THIS single funnel: every
+        // enable/disable path (text-entry count hook, WM_NCACTIVATE sync,
+        // FixInconsistentTextEntryCount, mod toggle, ToolWindowMenu close) ends up
+        // here. The requests used to live in ImeController::DoEnableIme, which the
+        // SyncImeState paths bypass — a disable following an enable (the ESC-close
+        // enable/disable churn) could then leave the overlay stuck visible with the
+        // pausing ToolWindowMenu shown: language bar stuck on screen and the game
+        // paused ("keys do not respond"). Writes happen on the IME thread, which is
+        // the documented writer of these runtime fields.
+        if (m_settings.appearance.autoToggleLanguageBar)
+        {
+            if (enable)
+            {
+                m_settings.runtimeData.requestShowOverlay = true;
+                m_settings.runtimeData.requestHideOverlay = false;
+            }
+            else
+            {
+                m_settings.runtimeData.requestShowOverlay = false;
+                m_settings.runtimeData.requestHideOverlay = true;
+            }
+        }
+
         bool success = false;
         if (enable)
         {
@@ -71,10 +145,27 @@ auto ImeManager::EnableIme(bool enable) -> Result
                 }
                 m_lastActiveProfile = GUID_NULL;
             }
+            else
+            {
+                // Diagnostic: means the disable path failed to remember the user's
+                // TIP (see the save logic there). Typing will stay on whatever the
+                // system currently has (usually the English keyboard) until the
+                // user switches manually or a TIP activation event arrives.
+                logger::debug("No input method remembered from the previous session, keeping the current one");
+            }
         }
         else
         {
             logger::info("IME disabled: setting IME_DISABLED, clearing TSF focus");
+            // Explicitly abort any active composition/candidate UI BEFORE clearing
+            // TSF focus. This is the same cleanup the status bar click performs
+            // (ImeMenu::OnMouseEvent -> AbortIme): without it, EnableIme(false)
+            // relied solely on the TSF composition-end callback chain, which does
+            // not reliably fire when WeChat/Microsoft Pinyin own the composition,
+            // leaving the candidate window up and IN_COMPOSING set ("still typing"
+            // after ESC). SendNotifyMessage to our own IME window dispatches
+            // synchronously, so m_textService->AbortIme() runs inline here.
+            m_imeWnd->AbortIme();
             state.Set(State::IME_DISABLED);
             success = m_imeWnd->FocusTextService(false);
             // Return the Win32 focus to the game window. EnableIme(true) always
@@ -87,7 +178,7 @@ auto ImeManager::EnableIme(bool enable) -> Result
             // Win32 focus back to the game window and intercepts WASD/keys there,
             // popping its candidate window or swallowing input. Switch the system
             // TIP back to the English keyboard so the game receives raw keys. The
-            // profile switch (TF_IPPMF_FORSESSION) only affects this session; the
+            // profile switch (TF_IPPMF_FORPROCESS) only affects this process; the
             // user's global input method is untouched. InputMethodManager's
             // OnActivated callback will clear IN_COMPOSING/IN_CAND_CHOOSING as a
             // side effect, which also fixes a stuck typing state after closing a
@@ -96,15 +187,25 @@ auto ImeManager::EnableIme(bool enable) -> Result
             // DEFAULT_LANG_PROFILE which may fail to activate.
             {
                 // Remember the IME the user was using, so EnableIme(true) can restore it.
-                const auto &activeLangProfile = m_imeWnd->GetActiveLangProfile();
-                if (activeLangProfile.guidProfile != GUID_NULL)
+                // Use the last real TIP seen by the activation sink instead of the
+                // active-profile cache: after a previous disable the cache points at
+                // the English keyboard (GUID_NULL), and a second disable in the same
+                // close (count churn / WM_NCACTIVATE sync) would then save nothing,
+                // silently losing the restore (observed in the game log as an
+                // "IME enabled" with no profile restore following it).
+                const GUID lastTipGuid = m_imeWnd->GetLastTipProfileGuid();
+                if (lastTipGuid != GUID_NULL)
                 {
-                    m_lastActiveProfile = activeLangProfile.guidProfile;
+                    m_lastActiveProfile = lastTipGuid;
                 }
                 if (FAILED(m_imeWnd->ActivateEnglishProfile()))
                 {
                     logger::warn("Failed to switch back to the English keyboard after disabling IME");
                 }
+                // ActivateKeyboardLayout(KLF_SETFORPROCESS) inside ActivateEnglishProfile
+                // only affects the IME thread; ask the game window to switch its own
+                // thread's layout (its keyboard state is what the game window uses).
+                ForceEnglishKeyboardOnGameThread();
             }
         }
         if (m_settings.autoToggleKeyboard)

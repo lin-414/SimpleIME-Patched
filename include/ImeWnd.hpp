@@ -87,6 +87,9 @@ public:
     //! Must call from IME thread.
     auto GetActiveLangProfile() const -> const LangProfile & { return m_inputMethodManager->GetActiveLangProfile(); }
 
+    //! GUID of the last real input processor (TIP) that activated — see InputMethodManager.
+    [[nodiscard]] auto GetLastTipProfileGuid() const -> const GUID & { return m_inputMethodManager->GetLastTipProfileGuid(); }
+
     //! Must call from IME thread. Switch to the English keyboard (langid 0x409).
     auto ActivateEnglishProfile() const -> HRESULT { return m_inputMethodManager->ActivateKeyboardEng(); }
 
