@@ -60,8 +60,19 @@ jobs:
         shell: pwsh
         run: |
           choco install fontforge --yes --no-progress
-          $env:PATH = "C:\Program Files (x86)\FontForgeBuilds\bin;$env:PATH"
-          echo "C:\Program Files (x86)\FontForgeBuilds\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # The choco package moved layouts across versions: the legacy x86
+          # path ("Program Files (x86)") vs the 64-bit one ("Program Files",
+          # since fontforge 2025.x). Locate fontforge.exe wherever it landed
+          # and put ITS directory on PATH — hardcoding one layout breaks when
+          # the package updates.
+          $roots = @("C:\Program Files\FontForgeBuilds", "C:\Program Files (x86)\FontForgeBuilds")
+          $exe = Get-ChildItem -Path $roots -Filter "fontforge.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $exe) {
+            Write-Host "##[error]fontforge.exe not found under: $($roots -join ', ')"
+            exit 1
+          }
+          Write-Host "FontForge found at: $($exe.FullName)"
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Set up CMake 4.x
         uses: jwlawson/actions-setup-cmake@v2
