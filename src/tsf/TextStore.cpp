@@ -771,7 +771,14 @@ auto TextStore::OnEndComposition(ITfCompositionView * /*pComposition*/) -> HRESU
 {
     auto  tracer     = FuncTracer("TextStore::{}", __func__);
     auto &textEditor = m_pTextService->GetTextEditorWrite();
-    if (m_OnEndCompositionCallback != nullptr)
+    // Inject the committed text only while our window still owns the thread's
+    // keyboard focus. When an OS-level window switch (Win+Shift+S, alt-tab,
+    // clicking away) terminates the composition, the focus is already gone:
+    // pushing the partial string into the game from inside the focus transition
+    // is both wrong (no field is there to receive it) and the suspected crash
+    // window of the old WM_KILLFOCUS FIXME. A normal commit (space / enter /
+    // candidate pick) still has focus and passes unchanged.
+    if (m_OnEndCompositionCallback != nullptr && GetFocus() == m_hWnd)
     {
         m_OnEndCompositionCallback(textEditor.GetText());
     }

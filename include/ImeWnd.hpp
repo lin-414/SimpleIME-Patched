@@ -10,6 +10,7 @@
 #include "ui/ImeWindow.h"
 
 #include "atlcomcli_shim.h"
+#include <atomic>
 #include <windows.h>
 
 #pragma comment(lib, "d3d11.lib")
@@ -124,6 +125,10 @@ private:
     float                           m_uiScale               = 1.0F;
     bool                            m_fWantUpdateUiScale    = true; ///< update scale in the first frame.
     bool                            m_fFocused              = false;
+    /// Set by WM_KILLFOCUS (IME thread), consumed by Draw() (render thread).
+    /// ImGui is single-threaded and the render thread owns the IO — clearing
+    /// input keys directly from the WndProc raced the frame in progress.
+    std::atomic<bool>               m_fWantClearInput       = false;
     bool                            m_fEnabledTsf           = true;
     bool                            m_fJustWantCaptureMouse = false;
 };

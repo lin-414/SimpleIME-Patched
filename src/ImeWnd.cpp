@@ -387,16 +387,30 @@ auto ImeWnd::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) -> LRES
             return 0;
         case WM_KILLFOCUS: {
             if (pThis == nullptr) break;
-            pThis->m_fFocused = false;
-            ImGui::GetIO().ClearInputKeys();
+            pThis->m_fFocused      = false;
+            pThis->m_fWantClearInput = true; // consumed by Draw() on the render thread (ImGui is single-threaded)
             logger::debug("IME window lost focus.");
-            // FIXME: crash when focus leaves ImeWnd during active composition via an OS-level window switch
-            // (e.g. Win+Shift+S snipping tool at the right timing). Root cause and exact site are unknown
-            // because no PDB is generated for that build configuration. Hypothesis: TSF/IMM32 posts a
-            // composition-end message that arrives after the ImeWnd or its related objects have been
-            // partially torn down, causing a use-after-free or null-deref.
-            // Repro: open any text field, start composing CJK text, immediately press Win+Shift+S and
-            // quickly click away to another window before the screenshot tool captures.
+            // Terminate an active composition NOW, here on the IME thread and
+            // under our control: AbortIme clears the editor first, so the
+            // composition-end TSF fires for this focus change delivers an empty
+            // string instead of injecting the partial composition through
+            // SendUiString while the OS is mid focus transition. That injection
+            // (plus the TIP tearing down its candidate UI around it) was the
+            // suspected crash window of the old FIXME below; ending the
+            // composition on our own terms closes it.
+            if (State::GetInstance().HasAny(State::IN_COMPOSING, State::IN_CAND_CHOOSING))
+            {
+                logger::debug("Focus lost during composition, aborting it on the IME thread.");
+                pThis->m_textService->AbortIme();
+            }
+            // Former FIXME: crash when focus leaves ImeWnd during active composition via an
+            // OS-level window switch (e.g. Win+Shift+S snipping tool at the right timing).
+            // Root causes addressed: (1) ImGui::GetIO().ClearInputKeys() used to run HERE on
+            // the IME thread, racing the render thread's ImGui frame (now deferred via
+            // m_fWantClearInput); (2) the composition ended by the focus change injected its
+            // partial text through SendUiString mid-transition (now terminated above with an
+            // already-cleared editor, and TextStore::OnEndComposition additionally refuses to
+            // inject when the thread focus is gone).
             return 0;
         }
         case WM_CHAR: {

@@ -74,7 +74,10 @@ void Imm32TextService::OnEndComposition()
 {
     {
         const std::scoped_lock lock(m_mutex);
-        if (m_OnEndCompositionCallback != nullptr)
+        // Same focus guard as the TSF path (TextStore::OnEndComposition): when
+        // the composition ends because an OS window switch stole the focus, do
+        // not push the partial text into the game mid-transition.
+        if (m_OnEndCompositionCallback != nullptr && GetFocus() == m_imeHwnd)
         {
             m_OnEndCompositionCallback(m_textEditor.GetText());
         }
