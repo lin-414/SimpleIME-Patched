@@ -112,6 +112,10 @@ private:
     /// WM_QUIT reaches the WndProc instead, which ignores it, and the loop
     /// (which only exits on a thread-queue WM_QUIT) would keep running.
     std::atomic<DWORD> m_imeThreadId{0};
+    /// Set by the IME worker when its full teardown (WM_DESTROY → OnDestroy →
+    /// UnInitialize) completed. Shutdown waits for it (bounded) so the
+    /// game-thread Uninitialize does not race the IME-thread teardown.
+    std::atomic<bool> m_imeTeardownDone{false};
     State              m_state;
 
     friend void           Ime::D3DInit();

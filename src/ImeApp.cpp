@@ -328,6 +328,9 @@ void ImeApp::Start(const RE::BSGraphics::RendererData &renderData)
                 // set_exception() may throw too
             }
         }
+        // Full teardown (window destroy → OnDestroy → UnInitialize) finished —
+        // ImeApp::Shutdown waits for this before touching shared state.
+        m_imeTeardownDone = true;
     });
 
     if (initialized.wait_for(INIT_TIMEOUT_SECONDS) == std::future_status::timeout)
@@ -366,6 +369,19 @@ void ImeApp::Shutdown()
     if (const DWORD imeThreadId = m_imeThreadId.load(); imeThreadId != 0 && !PostThreadMessageW(imeThreadId, WM_QUIT, 0, 0))
     {
         logger::error("Can't close ImeWnd! May IME uninitialized?");
+    }
+    // The worker tears itself down on the IME thread (WM_QUIT → loop exit →
+    // window destroy → OnDestroy → UnInitialize). Wait — bounded — so the
+    // game-thread Uninitialize() below does not race it (ImGui and TSF are not
+    // thread-safe). If the worker is stuck, proceed after 2s: it matched the
+    // old behavior of an unstoppable thread, minus the undefined teardown.
+    for (int i = 0; i < 200 && !m_imeTeardownDone.load(); ++i)
+    {
+        Sleep(10);
+    }
+    if (!m_imeTeardownDone.load())
+    {
+        logger::warn("IME thread did not finish teardown within 2s, continuing on the game thread.");
     }
     Uninitialize();
 }

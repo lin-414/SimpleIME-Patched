@@ -34,3 +34,4 @@ Data/SKSE/Plugins/version*.bin
 ##
 dev/
 private/
+.zcode/

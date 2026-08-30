@@ -953,17 +953,26 @@ auto TextStore::DoUpdateUIElement() -> HRESULT
             return E_FAIL;
         }
 
-        // UIElement sinks fire OUTSIDE the TSF document lock (unlike the
-        // ITextStoreACP methods inside OnLockGranted), so the candidate state
-        // mutations below must take the service lock themselves — the render
-        // thread copies m_candidateUi under the very same lock in
-        // RequestUpdate. When the sink fires inside a lock grant (a TIP
-        // refreshing its candidate UI within its edit session), RequestLock
-        // already holds the mutex and m_fLocked is set: taking it again would
-        // deadlock. The COM calls above stay outside either way: they touch
-        // only IME-thread state.
-        auto lock            = m_pTextService->GetSinkWriteLock(m_fLocked != FALSE);
-        auto &candidateUi    = m_pTextService->GetCandidateUiWrite();
+    // UIElement sinks fire OUTSIDE the TSF document lock (unlike the
+    // ITextStoreACP methods inside OnLockGranted), so the candidate state
+    // mutations below must take the service lock themselves — the render
+    // thread copies m_candidateUi under the very same lock in
+    // RequestUpdate. When the sink fires inside a lock grant (a TIP
+    // refreshing its candidate UI within its edit session), RequestLock
+    // already holds the mutex and m_fLocked is set: taking it again would
+    // deadlock. The COM calls above stay outside either way: they touch
+    // only IME-thread state.
+    //
+    // NOTE: the candidateUi mutations are inside the lock, but every
+    // m_currentCandidateUi COM call (GetString below, and BOTH Abort() calls)
+    // must stay OUTSIDE it: Abort() makes the TIP dismiss the element, which
+    // can synchronously re-enter UpdateUIElement → GetSinkWriteLock on this
+    // same non-recursive mutex. Hence the abortAfter deferral below.
+    bool             abortCurrentUi = false;
+    HRESULT          hresult        = S_OK;
+    {
+        auto lock         = m_pTextService->GetSinkWriteLock(m_fLocked != FALSE);
+        auto &candidateUi = m_pTextService->GetCandidateUiWrite();
         candidateUi.SetSelection(selection - info.pageStart);
         if (updateFlags == TF_CLUIE_SELECTION && candidateUi.FirstIndex() == info.pageStart)
         {
@@ -981,16 +990,26 @@ auto TextStore::DoUpdateUIElement() -> HRESULT
             CComBSTR candidateStr;
             if (FAILED(m_currentCandidateUi->GetString(index, &candidateStr)) || candidateStr == nullptr)
             {
-                m_currentCandidateUi->Abort();
-                return E_FAIL;
+                // Abort AFTER releasing the lock — see the NOTE above.
+                abortCurrentUi = true;
+                hresult        = E_FAIL;
+                break;
             }
 
             auto fmt = std::format(L"{}. ", j + 1);
             fmt.append(candidateStr);
             candidateUi.PushBack(WCharUtils::ToString(fmt));
         }
-        return S_OK;
     }
+        if (abortCurrentUi)
+        {
+            m_currentCandidateUi->Abort();
+        }
+        return hresult;
+    }
+    // GetCandInfo failed: dismiss the element. Lock is NOT held here (the
+    // scoped block above released it), so the synchronous sink re-entry that
+    // Abort() may trigger is safe.
     m_currentCandidateUi->Abort();
     return E_FAIL;
 }
