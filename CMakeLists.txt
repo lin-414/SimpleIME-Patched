@@ -141,8 +141,11 @@ execute_process(
 
 set(PROJECT_VERSION_STRING "v${PROJECT_VERSION}")
 if (NOT GIT_TAG STREQUAL PROJECT_VERSION_STRING)
-  message(FATAL_ERROR "Please update cmake version! git tag ${GIT_TAG} does not match project version ${PROJECT_VERSION_STRING}")
-  return()
+  # Warning, not FATAL_ERROR: this gate previously made EVERY local/CI build
+  # fail between a version bump and its tagging (chicken-and-egg: the tag can
+  # only exist after the commit, but the DLL for the release must be built from
+  # that commit). Release correctness is enforced by the release pipeline.
+  message(WARNING "git tag ${GIT_TAG} does not match project version ${PROJECT_VERSION_STRING} — building a non-release version.")
 endif ()
 
 ############################################################
