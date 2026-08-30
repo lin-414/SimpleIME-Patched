@@ -225,3 +225,45 @@ Win32 焦点"，**没有把系统输入法切走**。你系统激活的输入法
   前缀是 C:\Program Files (x86)\SimpleIME，不是 dist/）。
 - 用户 MO2（E:\Skyrim AE）装有两个 SimpleIME 文件夹，启用的是 `SimpleIME`（`中文输入 SimpleIME`
   已禁用，enable_mod=false，勿混淆其配置）。
+
+## 第五轮：焦点抢占加固 + P0 健壮性审计修复 (2026-08-29/30)
+
+> 第四轮后两块工作：①修复遗留的 WM_KILLFOCUS 竞态崩溃 FIXME（faa7bc8）；②全面健壮性审计
+> （Explore 双代理）后按用户选定范围实施 P0 崩溃/UAF/挂死类修复（97f6567 + 05b174f2）。
+
+### 焦点抢占加固 (faa7bc8)
+原 FIXME 崩溃（组合中被 Win+Shift+S 抢焦点）实为三个并发缺陷：IME 线程上调
+`ImGui::ClearInputKeys` 与渲染线程 ImGui 帧竞态（改原子标志延后）；被终止组合在焦点切换
+竞态窗口内注入半截文本（TSF/IMM32 注入前校验 `GetFocus()==窗口`）；组合终止权交由 TIP
+在混乱中自行拆解（改为 WM_KILLFOCUS 时 IME 线程主动 AbortIme，先清编辑器使后续回调拿空串）。
+
+### P0 审计修复 (97f6567 + 05b174f2)
+1. **ErrorNotifier 无锁 deque**（子模块 fork lin-414/JamieMods@b6c74e7，.gitmodules 改指向）：
+   IME 线程写入 vs 渲染线程迭代擦除 → UAF。全量互斥量保护；拷贝构造删除；
+   settings_converter 改引用（拷贝单例静默吞错误）。
+2. **TSF sink 无锁写入**：组合/候选 UI sink 在文档锁外触发，与渲染线程 RequestUpdate
+   拷贝竞态。`GetSinkWriteLock(m_fLocked)` 条件锁——sink 在 OnLockGranted 内触发时
+   RequestLock 已持锁，重入非递归锁会死锁。
+3. **任务比 Shutdown 活得久**：8 个 lambda 执行时重查 IsReady；OnDestroy 排空队列；
+   Shutdown 先置标志；AddTask 先拷贝 HWND。
+4. **有序 IME 线程关闭**：WM_QUIT 投递到线程（原发窗口被 WndProc 忽略，循环永不退出）；
+   worker 循环退出后本线程 DestroyWindow；Start 的 promise 换 shared_ptr（超时 UAF）；
+   ~ImeWnd 不再跨线程拆 COM；TsfSupport 仅平衡自己初始化的 COM。
+5. 快速项：shortcut 解析死循环（启动挂死）；OnStartComposition AddRef 泄漏；
+   主题 RGB G/B 通道错用 R + string_view 读陈旧缓冲。
+
+### 自查发现并修复 (05b174f2)
+- DoUpdateUIElement 持锁调用 `m_currentCandidateUi->Abort()` → Abort 同步重入
+  UpdateUIElement sink → 非递归锁自我死锁。两个 Abort 延迟到锁外；重构时误删的
+  GetCandInfo 失败路径已恢复。
+- PostThreadMessageW 使 IME 线程真正自拆后，D3DInit 失败路径上与游戏线程
+  Uninitialize 并发（ImGui/TSF 非线程安全）→ worker 完成后置 m_imeTeardownDone，
+  Shutdown 有界等待（2s）。
+- .zcode 会话产物误入提交 → 移除 + .gitignore。
+
+### 工程注意事项（新增）
+- **发版顺序**：先升 CMakeLists VERSION 再构建产物（v2.2.2 的 zip 内 DLL 内嵌版本仍是
+  2.2.1 的教训）；发布用 `gh release create <tag> --notes-file <notes> <zip>`（tag push
+  不触发 workflow，原因未查明；dispatch 可手动触发但 FontForge 修复后未端到端验证过）。
+- JamieMods 子模块现为用户 fork（fix/error-notifier-thread-safety 分支），上游更新时需
+  在 GitHub 上同步 fork。

@@ -1,3 +1,39 @@
+## [2.3.0] - 2026-08-30
+
+### 🛡️ Robustness
+
+- Harden the focus-steal path during active composition (the old `WM_KILLFOCUS` FIXME):
+  defer ImGui input-key clearing to the render thread, refuse to inject a focus-stolen
+  composition's partial text, and terminate the composition on the IME thread under our
+  control.
+
+### 🐛 Bug Fixes
+
+- `ErrorNotifier` (JamieMods submodule): guard the message deque with a mutex — it was
+  mutated from the IME thread while the render thread iterated it (use-after-free) — and
+  delete copy construction (a copied singleton silently swallowed errors).
+- TSF composition/UIElement sinks now lock the editor/candidate state against the render
+  thread's copies; a document-lock predicate prevents self-deadlock for sinks firing
+  inside `OnLockGranted` (`Abort()` re-entrancy deferred outside the lock).
+- Queued IME-thread tasks re-check readiness, the queue is drained before controller
+  teardown, and `Shutdown` flips its flag before nulling members — tasks can no longer
+  run against a torn-down controller.
+- Orderly IME thread shutdown: `WM_QUIT` is posted to the worker thread (a window-targeted
+  one was ignored, leaving the loop running through teardown); the worker destroys its
+  window after the loop so teardown runs where the COM apartment lives; the init-timeout
+  promise is a `shared_ptr` (no use-after-free after a timeout); `~ImeWnd` and
+  `TsfSupport` no longer tear COM down cross-thread or without balance.
+- A malformed `shortcut` config value no longer hangs the game at boot (keychord parser
+  infinite loop on unrecognized tokens).
+- `TextStore::OnStartComposition` no longer leaks one TSF composition-view reference per
+  session.
+- Theme hex-RGB input applies G and B instead of the red channel, and parses the
+  null-terminated edit rather than a stale fixed-size buffer.
+- `settings_converter` takes the `ErrorNotifier` singleton by reference (a copy silently
+  discarded every config-error notification).
+
+**Full Changelog**: https://github.com/lin-414/SimpleIME-Patched/compare/v2.2.2...v2.3.0
+
 ## [2.2.2] - 2026-08-28
 
 ### 🐛 Bug Fixes
