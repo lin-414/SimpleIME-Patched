@@ -137,11 +137,13 @@ inline void ManageImeOverlayOnDemand(std::unique_ptr<UI::ImeOverlay> &imeOverlay
 
 ImeWnd::~ImeWnd()
 {
-    UnInitialize();
-    if (m_hWnd != nullptr)
-    {
-        DestroyWindow(m_hWnd);
-    }
+    // Intentionally NO UnInitialize()/DestroyWindow here: this destructor runs
+    // during static destruction on the game thread, while the IME thread owns
+    // the window, its COM apartment and every TSF object — tearing those down
+    // cross-thread is undefined (and CoUninitialize would balance an apartment
+    // this thread never initialized). The full teardown runs on the IME thread
+    // in OnDestroy (WM_DESTROY), which the ImeApp::Start worker performs after
+    // its message loop exits.
 }
 
 void ImeWnd::InitializeTextService()
@@ -564,6 +566,11 @@ void ImeWnd::OnCreated(Settings &settings)
 auto ImeWnd::OnDestroy() -> LRESULT
 {
     logger::info("Destroy IME Window");
+    // Drain queued IME-thread tasks BEFORE tearing the controller down: this is
+    // the same thread the tasks execute on, and ImeController/m_imeWnd/m_delegate
+    // are still alive here. Running them after Shutdown would dereference the
+    // nulled members (the tasks' IsReady() re-check is only a backstop).
+    TaskQueue::GetInstance().ExecuteImeThreadTasks();
     ImeController::GetInstance()->Shutdown();
     UnInitialize();
     PostQuitMessage(0);

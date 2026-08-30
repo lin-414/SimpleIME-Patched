@@ -107,7 +107,12 @@ private:
     Settings m_settings;
     ImeWnd   m_imeWnd{};
     HWND     m_hWnd = nullptr;
-    State    m_state;
+    /// Thread id of the IME message-loop worker (set by the worker itself on
+    /// start). ImeApp::Shutdown posts WM_QUIT to it — a window-targeted
+    /// WM_QUIT reaches the WndProc instead, which ignores it, and the loop
+    /// (which only exits on a thread-queue WM_QUIT) would keep running.
+    std::atomic<DWORD> m_imeThreadId{0};
+    State              m_state;
 
     friend void           Ime::D3DInit();
     void                  DoD3DInit();

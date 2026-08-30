@@ -755,7 +755,10 @@ auto TextStore::OnStartComposition(ITfCompositionView *pComposition, BOOL *pfOk)
 {
     logger::trace("TextStore::{}", __func__);
     *pfOk = TRUE;
-    pComposition->AddRef();
+    // No AddRef here: the view is owned by TSF for the lifetime of the
+    // composition, and this sink never stores the pointer — the old AddRef
+    // leaked one reference (and transitively its context/document refs) on
+    // every composition session.
     State::GetInstance().Set(State::IN_COMPOSING);
     return S_OK;
 }
@@ -770,6 +773,17 @@ auto TextStore::OnUpdateComposition(ITfCompositionView * /*pComposition*/, ITfRa
 auto TextStore::OnEndComposition(ITfCompositionView * /*pComposition*/) -> HRESULT
 {
     auto  tracer     = FuncTracer("TextStore::{}", __func__);
+    // Composition sinks fire OUTSIDE the TSF document lock (unlike the
+    // ITextStoreACP methods inside OnLockGranted), so the editor/candidate
+    // mutations below must take the service lock themselves — the render
+    // thread copies the same state under that lock in RequestUpdate. When the
+    // sink fires INSIDE a lock grant (a TIP ending its composition within its
+    // edit session), RequestLock already holds the mutex and m_fLocked is set:
+    // taking it again would deadlock. Safe against re-entrancy otherwise:
+    // every TerminateComposition caller (TextService::AbortIme, ClearFocus)
+    // releases the lock before calling it, and the callback here (SendUiString)
+    // only posts a game message.
+    auto  lock       = m_pTextService->GetSinkWriteLock(m_fLocked != FALSE);
     auto &textEditor = m_pTextService->GetTextEditorWrite();
     // Inject the committed text only while our window still owns the thread's
     // keyboard focus. When an OS-level window switch (Win+Shift+S, alt-tab,
@@ -939,7 +953,17 @@ auto TextStore::DoUpdateUIElement() -> HRESULT
             return E_FAIL;
         }
 
-        auto &candidateUi = m_pTextService->GetCandidateUiWrite();
+        // UIElement sinks fire OUTSIDE the TSF document lock (unlike the
+        // ITextStoreACP methods inside OnLockGranted), so the candidate state
+        // mutations below must take the service lock themselves — the render
+        // thread copies m_candidateUi under the very same lock in
+        // RequestUpdate. When the sink fires inside a lock grant (a TIP
+        // refreshing its candidate UI within its edit session), RequestLock
+        // already holds the mutex and m_fLocked is set: taking it again would
+        // deadlock. The COM calls above stay outside either way: they touch
+        // only IME-thread state.
+        auto lock            = m_pTextService->GetSinkWriteLock(m_fLocked != FALSE);
+        auto &candidateUi    = m_pTextService->GetCandidateUiWrite();
         candidateUi.SetSelection(selection - info.pageStart);
         if (updateFlags == TF_CLUIE_SELECTION && candidateUi.FirstIndex() == info.pageStart)
         {

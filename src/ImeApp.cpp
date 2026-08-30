@@ -284,32 +284,44 @@ void ImeApp::OnD3DInit()
 
 void ImeApp::Start(const RE::BSGraphics::RendererData &renderData)
 {
-    std::promise<bool> ensureInitialized;
-    const auto         initialized = ensureInitialized.get_future();
-    // run ImeWnd in a standalone thread
-    auto              *device      = reinterpret_cast<ID3D11Device *>(renderData.forwarder);
-    auto              *context     = reinterpret_cast<ID3D11DeviceContext *>(renderData.context);
+    // shared_ptr, NOT a stack object captured by reference: if initialization
+    // times out below, Start unwinds and destroys the stack — while the
+    // detached IME thread may still call set_value/set_exception on it (UB).
+    const auto ensureInitialized = std::make_shared<std::promise<bool>>();
+    auto       initialized       = ensureInitialized->get_future();
+    // run IME window in a standalone thread
+    auto *device  = reinterpret_cast<ID3D11Device *>(renderData.forwarder);
+    auto *context = reinterpret_cast<ID3D11DeviceContext *>(renderData.context);
 
     ImGuiEx::Initialize(m_hWnd, device, context);
     const auto defaultFontFilePathList = GetDefaultFontFilePathList();
     (void)ImGuiEx::AddPrimaryFont(m_settings.resources.fontPathList, defaultFontFilePathList);
     ImGuiEx::M3::Initialize(utils::GetInterfaceFile(Settings::ICON_FILE), m_settings.appearance.schemeConfig);
 
-    std::thread childWndThread([&ensureInitialized, this] -> void {
+    std::thread childWndThread([ensureInitialized, this] -> void {
         SetThreadDescription(GetCurrentThread(), L"SimpleIME Message Thread");
+        m_imeThreadId = GetCurrentThreadId();
         try
         {
             m_imeWnd.Initialize(m_settings.enableTsf);
-            ensureInitialized.set_value(true);
+            ensureInitialized->set_value(true);
             // we can't call ensureInitialized after create child window, will cause deadlock.
             m_imeWnd.CreateHost(m_hWnd, m_settings);
             ImeWnd::Run();
+            // The message loop exited (thread WM_QUIT): destroy the window HERE
+            // on the IME thread, so WM_DESTROY → OnDestroy performs the full
+            // teardown (task drain, Shutdown, TSF/COM uninit) where the COM
+            // apartment actually lives.
+            if (const HWND imeHwnd = m_imeWnd.GetHWND(); imeHwnd != nullptr)
+            {
+                DestroyWindow(imeHwnd);
+            }
         }
         catch (...)
         {
             try
             {
-                ensureInitialized.set_exception(std::current_exception());
+                ensureInitialized->set_exception(std::current_exception());
             }
             catch (...)
             {
@@ -347,7 +359,11 @@ void ImeApp::Shutdown()
     logger::LogStacktrace();
     m_state.SetState(State::StateKey::SHUTDOWN);
     logger::info("Force close ImeWnd...");
-    if (!m_imeWnd.SendNotifyMessageToIme(WM_QUIT, 0, 0))
+    // Post a THREAD message: ImeWnd::Run only exits when PeekMessage retrieves
+    // a thread-queue WM_QUIT — sending WM_QUIT to the window (the old
+    // SendNotifyMessage path) reaches the WndProc, which ignores it, and the
+    // loop kept running while teardown proceeded underneath.
+    if (const DWORD imeThreadId = m_imeThreadId.load(); imeThreadId != 0 && !PostThreadMessageW(imeThreadId, WM_QUIT, 0, 0))
     {
         logger::error("Can't close ImeWnd! May IME uninitialized?");
     }

@@ -144,6 +144,14 @@ struct Converter<ImGuiKeyChord>
                 shortcut |= foundKeyOpt.value();
                 parseComplete = (partPos == std::string::npos);
             }
+            else
+            {
+                // Unrecognized token (e.g. "ctr" or "foo"): without advancing, the
+                // loop condition never changes and this while spins forever — this
+                // runs in ImeApp's constructor, so a malformed shortcut in the
+                // config hung the whole game at boot with no log.
+                return std::nullopt;
+            }
         }
         if (parseComplete && !onlyModifier)
         {
@@ -308,7 +316,10 @@ auto ConvertSettingsToConfiguration(const Settings &settings) -> Configuration
     configuration.fixInconsistentTextEntryCount = settings.fixInconsistentTextEntryCount;
     configuration.autoToggleKeyboard            = settings.autoToggleKeyboard;
 
-    ErrorNotifier errorNotifier = ErrorNotifier::GetInstance();
+    // Reference, NOT a copy: the singleton copy below silently swallowed every
+    // Error/Warning raised here — they were pushed into a discarded object and
+    // neither shown in-game nor logged.
+    ErrorNotifier &errorNotifier = ErrorNotifier::GetInstance();
     if (const auto shortcut = Converter<ImGuiKeyChord>::toString(settings.shortcut); shortcut.has_value())
     {
         configuration.shortcut = shortcut.value();

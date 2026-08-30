@@ -301,6 +301,23 @@ public:
 
     [[nodiscard]] auto GetWriteLock() -> std::scoped_lock<std::shared_mutex> { return std::scoped_lock(m_mutex); }
 
+    /// Exclusive lock for TSF sinks (composition / UIElement) that can fire BOTH
+    /// inside and outside the TSF document lock:
+    ///  - Inside OnLockGranted, RequestLock already holds this mutex for the
+    ///    whole grant scope (it is not recursive — locking again would
+    ///    deadlock), so pass documentLockHeld=true and rely on it.
+    ///  - Outside, the sink must lock itself: the render thread's
+    ///    RequestUpdate copies the same state under this mutex.
+    [[nodiscard]] auto GetSinkWriteLock(bool documentLockHeld) const -> std::unique_lock<std::shared_mutex>
+    {
+        std::unique_lock<std::shared_mutex> lock(m_mutex, std::defer_lock);
+        if (!documentLockHeld)
+        {
+            lock.lock();
+        }
+        return lock;
+    }
+
     auto ProcessImeMessage(HWND /*hWnd*/, UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) -> bool override;
 
 protected:

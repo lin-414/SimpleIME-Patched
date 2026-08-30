@@ -39,6 +39,7 @@ auto ImeController::EnableMod(bool enable) -> void
     if (m_fEnabledMod.load() != enable)
     {
         AddTask([this, enable] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
             const bool prev = m_fEnabledMod.load();
             if (!prev)
             {
@@ -64,6 +65,7 @@ void ImeController::ActivateLangProfile(const GUID &guidProfile) const
     // thread; `[&]` would bind a reference to the caller's GUID, which may
     // already be gone by the time the task runs (use-after-free).
     AddTask([this, guidProfile] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IsModEnabled() && FAILED(m_imeWnd->ActivateLanguageProfile(guidProfile)))
         {
             const auto strGuid = WCharUtils::ToString(ToStringFromGUID2(guidProfile));
@@ -77,6 +79,7 @@ auto ImeController::CommitCandidate(DWORD index) const -> void
     if (!IsReady()) return;
 
     AddTask([this, index] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IsModEnabled())
         {
             m_imeWnd->CommitCandidate(index);
@@ -89,6 +92,7 @@ auto ImeController::SetConversionMode(DWORD conversionMode) const -> void
     if (!IsReady()) return;
 
     AddTask([this, conversionMode] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IsModEnabled())
         {
             m_imeWnd->SetConversionMode(conversionMode);
@@ -101,6 +105,7 @@ void ImeController::EnableIme(bool enable) const
     if (!IsReady()) return;
 
     AddTask([this, enable] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IImeModule::IsFailed(DoEnableIme(enable)))
         {
             ErrorNotifier::GetInstance().Warning("Unexpected error: EnableIme failed.");
@@ -113,6 +118,7 @@ void ImeController::ForceFocusIme() const
     if (!IsReady()) return;
 
     AddTask([this] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IImeModule::IsFailed(DoForceFocusIme()))
         {
             ErrorNotifier::GetInstance().Warning("Unexpected error: ForceFocusIme failed.");
@@ -125,6 +131,7 @@ void ImeController::SyncImeState()
     if (!IsReady()) return;
 
     AddTask([this] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IImeModule::IsFailed(DoSyncImeState()))
         {
             ErrorNotifier::GetInstance().Warning("Unexpected error: SyncImeState failed");
@@ -137,6 +144,7 @@ void ImeController::TryFocusIme() const
     if (!IsReady()) return;
 
     AddTask([this] -> void {
+    if (!IsReady()) return; // may run after Shutdown nulls the members
         if (IImeModule::IsFailed(DoTryFocusIme()))
         {
             ErrorNotifier::GetInstance().Warning("Unexpected error: TryFocusIme failed");
@@ -317,9 +325,13 @@ auto ImeController::UnlockKeyboard() const -> bool
 
 void ImeController::AddTask(TaskQueue::Task &&task) const
 {
+    // Copy the window handle before queueing: Shutdown (IME thread) may null
+    // m_imeWnd between the caller's IsReady() check and this dereference.
+    const HWND imeHwnd = (m_imeWnd != nullptr) ? m_imeWnd->GetHWND() : nullptr;
+
     TaskQueue::GetInstance().AddImeThreadTask(std::move(task));
 
-    if (FALSE == PostMessageA(m_imeWnd->GetHWND(), CM_EXECUTE_TASK, 0, 0))
+    if (imeHwnd == nullptr || FALSE == PostMessageA(imeHwnd, CM_EXECUTE_TASK, 0, 0))
     {
         logger::error("Failed to post CM_EXECUTE_TASK to ImeWnd.");
     }
@@ -340,11 +352,16 @@ void ImeController::Init(ImeWnd *imeWnd, HWND gameHwnd, Settings &settings)
 
 void ImeController::Shutdown()
 {
+    // Flip the readiness flag FIRST: game-thread callers check IsReady() before
+    // dereferencing the members below (and before AddTask copies the IME window
+    // handle), so this must be observed before anything is nulled. Shutdown
+    // runs on the IME thread (ImeWnd::OnDestroy) after the task queue was
+    // drained there — see ImeWnd::OnDestroy.
+    m_fInited  = false;
     m_settings = nullptr;
     m_delegate.reset();
     m_gameHwnd = nullptr;
     m_imeWnd   = nullptr;
-    m_fInited  = false;
 }
 
 } // namespace Ime

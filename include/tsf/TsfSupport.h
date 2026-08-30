@@ -43,8 +43,15 @@ public:
         m_KeystrokeMgr.Release();
         m_messagePump.Release();
         m_pThreadMgr.Release();
-        CoUninitialize();
-        m_initialized = false;
+        // Only balance the CoInitializeEx we actually performed: teardown paths
+        // can reach here when TSF was never initialized (or already torn down),
+        // and CoUninitialize on the wrong or uninitialized thread decrements
+        // an apartment this thread never owned.
+        if (m_initialized)
+        {
+            CoUninitialize();
+            m_initialized = false;
+        }
     }
 
     [[nodiscard]] constexpr auto GetThreadMgr() const -> const CComPtr<ITfThreadMgrEx> & { return m_pThreadMgr; }

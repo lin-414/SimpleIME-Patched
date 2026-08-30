@@ -139,7 +139,10 @@ void HexRgbInputText(AppearancePanel::HctCache &hctCache)
 
     if (ImGuiEx::M3::OutlinedTextField("RGB", buffer.data(), buffer.capacity()))
     {
-        std::string_view view = buffer;
+        // Construct from the C-string (strlen), not from buffer.size(): the
+        // text field null-terminates its edit inside the buffer, and size()
+        // stays at the original 7 — a stale suffix would otherwise be parsed.
+        std::string_view view = std::string_view(buffer.data());
         for (const auto &c : view)
         {
             if (c == '#' || std::isspace(c) != 0)
@@ -152,8 +155,8 @@ void HexRgbInputText(AppearancePanel::HctCache &hctCache)
 
         std::array<int, 3U> color{};
         constexpr size_t    col_r_idx = 0U;
-        constexpr size_t    col_g_idx = 0U;
-        constexpr size_t    col_b_idx = 0U;
+        constexpr size_t    col_g_idx = 1U;
+        constexpr size_t    col_b_idx = 2U;
 
         const char *pHexColor = view.data();
         size_t      j         = 0U;

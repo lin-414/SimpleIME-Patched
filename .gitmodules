@@ -6,4 +6,7 @@
 	url = https://github.com/ocornut/imgui
 [submodule "extern/JamieMods"]
 	path = extern/JamieMods
-	url = https://github.com/cyfewlp/JamieMods.git
+	# Fork of cyfewlp/JamieMods carrying the thread-safe ErrorNotifier fix
+	# (branch fix/error-notifier-thread-safety, commit b6c74e7). Sync the fork
+	# from upstream when the parent project updates the submodule.
+	url = https://github.com/lin-414/JamieMods.git
